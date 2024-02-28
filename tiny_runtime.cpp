@@ -119,36 +119,12 @@ static bool start_overlayfs()
     return false;
 }
 
-[[nodiscard]]
-static bool bind_mount(const char* path, int flags = MS_BIND|MS_REC)
-{
-    namespace fs = std::filesystem;
-    fs::path target = std::string{config::FINAL} + path;
-    fs::path source = path;
-
-    if(fs::is_directory(source))
-        std::filesystem::create_directories(target);
-    else
-        std::filesystem::create_directories(target.parent_path());
-
-    if(mount(path, target.c_str(), nullptr, flags, nullptr) != 0)
-    {
-        sys_error("Could not bind-mount {} into container (flags={})", path, flags);
-        return false;
-    }
-    if(mount(nullptr, target.c_str(), nullptr, (flags & MS_REC)|MS_SLAVE, nullptr) != 0)
-    {
-        sys_error("Could not change {} to MS_SLAVE", std::string{target});
-        return false;
-    }
-
-    return true;
-}
-
 int main(int argc, char** argv)
 {
     int euid = geteuid();
     int egid = getegid();
+
+    int containerArg = 1;
 
     mkdir(config::SESSION, 0777);
 
@@ -247,6 +223,7 @@ int main(int argc, char** argv)
             squashfsFile = argv[1];
             squashfsOffset = 0;
             squashfsSize = os::file_size(squashfsFile.c_str());
+            containerArg = 2;
         }
 
         auto writeTool = [&](const char* dest, std::size_t offset, std::size_t size){
@@ -331,18 +308,18 @@ int main(int argc, char** argv)
     });
     for(auto& path : bindMounts)
     {
-        if(!bind_mount(path.path, path.flags))
+        if(!os::bind_mount(path.path, path.flags))
             fatal("Could not mount {}", path.path);
     }
 
     // Mount $HOME
     if(auto home = getenv("HOME"))
     {
-        if(!bind_mount(home))
+        if(!os::bind_mount(home))
             fatal("Could not mount your home directory '{}'", home);
     }
 
-    // Run nvidia-container-cli
+    // Mount nvidia tools & libraries
     info("NVIDIA setup...");
     nvidia::configure();
 
@@ -374,10 +351,27 @@ int main(int argc, char** argv)
         error("Could not cd to current directory ({}): {}", std::string{cwd}, e.what());
     }
 
-    // info("Starting user command");
-    // auto args = std::to_array({strdup("/bin/bash"), static_cast<char*>(nullptr)});
-    // if(execv("/bin/bash", args.data()) != 0)
-    //     sys_fatal("Could not execute /bin/bash");
+    info("Starting user command");
+
+    if(fs::exists("/.singularity.d/runscript"))
+    {
+        std::vector<char*> args;
+        args.push_back(strdup("runscript"));
+
+        for(int i = containerArg; i < argc; ++i)
+            args.push_back(strdup(argv[i]));
+
+        args.push_back(nullptr);
+
+        if(execv("/.singularity.d/runscript", args.data()) != 0)
+            sys_fatal("Could not execute /.singularity.d/runscript");
+    }
+    else
+    {
+        auto args = std::to_array({strdup("/bin/bash"), static_cast<char*>(nullptr)});
+        if(execv("/bin/bash", args.data()) != 0)
+            sys_fatal("Could not execute /bin/bash");
+    }
 
     return 0;
 }

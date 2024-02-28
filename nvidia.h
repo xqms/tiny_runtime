@@ -6,7 +6,7 @@
 
 namespace nvidia
 {
-    [[nodiscard]] bool configure();
+    bool configure();
 }
 
 #endif

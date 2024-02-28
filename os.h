@@ -8,8 +8,11 @@
 #include <cstdlib>
 #include <concepts>
 #include <cstring>
+#include <filesystem>
+#include <optional>
 
 #include <unistd.h>
+#include <sys/mount.h>
 
 #include "log.h"
 
@@ -64,6 +67,12 @@ bool run_with_caps(const char* cmd, Args&& ... args)
 
     return true;
 }
+
+[[nodiscard]]
+bool bind_mount(const char* path, int flags = MS_BIND|MS_REC);
+
+[[nodiscard]]
+std::optional<std::filesystem::path> find_binary(const std::string_view& name);
 
 }
 

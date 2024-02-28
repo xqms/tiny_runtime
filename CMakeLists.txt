@@ -21,30 +21,6 @@ ExternalProject_Add(fuse_overlayfs
     BUILD_COMMAND ""
     INSTALL_COMMAND ""
 )
-ExternalProject_Add(libnvidia-container
-    DOWNLOAD_COMMAND rm -Rf $<SOURCE_DIR>
-             COMMAND git clone --recursive --depth=1 -b v1.14.6 https://github.com/NVIDIA/libnvidia-container.git $<SOURCE_DIR>
-             COMMAND git -C $<SOURCE_DIR> checkout d2eb0afe86f0b643e33624ee64f065dd60e952d4
-
-    CONFIGURE_COMMAND ""
-    #PATCH_COMMAND patch -p1 < ${CMAKE_CURRENT_SOURCE_DIR}/patches/fix_elftoolchain.patch
-    #      COMMAND patch -p1 < ${CMAKE_CURRENT_SOURCE_DIR}/patches/fix_rpc_flags.patch
-
-    BUILD_IN_SOURCE ON
-    BUILD_COMMAND make prefix=${CMAKE_CURRENT_BINARY_DIR}/tools WITH_NVCGO=no WITH_LIBELF=yes WITH_TIRPC=yes
-    INSTALL_COMMAND make install prefix=${CMAKE_CURRENT_BINARY_DIR}/tools WITH_NVCGO=no WITH_LIBELF=yes WITH_TIRPC=yes
-)
-
-add_library(nvc INTERFACE)
-target_link_libraries(nvc INTERFACE
-    "${CMAKE_CURRENT_BINARY_DIR}/tools/lib/libnvidia-container.a"
-    elf
-    seccomp
-    z
-)
-target_include_directories(nvc INTERFACE
-    "${CMAKE_CURRENT_BINARY_DIR}/tools/include"
-)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_FLAGS "-Wall")
@@ -56,11 +32,11 @@ add_executable(tiny_runtime_starter
     elf_size.cpp
     os.cpp
     nvidia.cpp
+    ldcache.cpp
 )
 target_link_libraries(tiny_runtime_starter
     fmt::fmt
     cap
-    nvc
 )
 target_link_options(tiny_runtime_starter PRIVATE
     "-static"

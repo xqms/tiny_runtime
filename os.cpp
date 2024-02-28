@@ -6,6 +6,7 @@
 #include <array>
 #include <algorithm>
 #include <fstream>
+#include <ranges>
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -15,6 +16,9 @@
 
 #include "log.h"
 #include "scope_guard.h"
+#include "config.h"
+
+namespace fs = std::filesystem;
 
 namespace os
 {
@@ -96,6 +100,60 @@ bool is_mountpoint(const char* path)
     }
 
     return false;
+}
+
+[[nodiscard]]
+bool bind_mount(const char* path, int flags)
+{
+    namespace fs = std::filesystem;
+    fs::path target = std::string{config::FINAL} + path;
+    fs::path source = path;
+
+    if(fs::is_directory(source))
+        std::filesystem::create_directories(target);
+    else
+    {
+        std::filesystem::create_directories(target.parent_path());
+        if(!fs::exists(target))
+        {
+            int fd = open(target.c_str(), O_RDWR|O_CREAT, 0755);
+            close(fd);
+        }
+    }
+
+    if(mount(path, target.c_str(), nullptr, flags, nullptr) != 0)
+    {
+        sys_error("Could not bind-mount {} into container (flags={})", path, flags);
+        return false;
+    }
+    if(mount(nullptr, target.c_str(), nullptr, (flags & MS_REC)|MS_SLAVE, nullptr) != 0)
+    {
+        sys_error("Could not change {} to MS_SLAVE", std::string{target});
+        return false;
+    }
+
+    return true;
+}
+
+std::optional<std::filesystem::path> find_binary(const std::string_view& name)
+{
+    std::string_view PATH = getenv("PATH") ? getenv("PATH") : "/bin:/usr/bin";
+
+    for(const auto dir : std::views::split(PATH, ':'))
+    {
+        auto path = fs::path(std::string_view(&*dir.begin(), std::ranges::distance(dir))) / fs::path(name);
+
+        std::error_code ec;
+        auto stat = fs::status(path, ec);
+
+        if(ec)
+            continue;
+
+        if(stat.type() != fs::file_type::directory && (stat.permissions() & fs::perms::owner_exec) != fs::perms::none)
+            return path;
+    }
+
+    return {};
 }
 
 }
