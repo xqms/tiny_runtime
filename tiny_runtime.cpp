@@ -11,6 +11,7 @@
 #include <vector>
 #include <ranges>
 #include <algorithm>
+#include <concepts>
 
 #include <sched.h>
 #include <stdio.h>
@@ -67,35 +68,187 @@ void set_ambient_caps()
 
     auto guard = sg::make_scope_guard([&]{ cap_free(caps); });
 
-    auto cap_list = std::to_array({CAP_SYS_ADMIN});
+    auto cap_list = std::to_array({
+        CAP_SYS_ADMIN, CAP_DAC_OVERRIDE, CAP_MKNOD, CAP_CHOWN,
+        CAP_DAC_OVERRIDE, CAP_DAC_READ_SEARCH, CAP_FOWNER,
+        CAP_KILL, CAP_NET_ADMIN, CAP_SETGID, CAP_SETPCAP,
+        CAP_SETUID, CAP_SYS_CHROOT, CAP_SYS_PTRACE
+    });
     if(cap_set_flag(caps, CAP_INHERITABLE, cap_list.size(), cap_list.data(), CAP_SET) != 0)
+        sys_fatal("Could not set cap flags");
+    if(cap_set_flag(caps, CAP_PERMITTED, cap_list.size(), cap_list.data(), CAP_SET) != 0)
         sys_fatal("Could not set cap flags");
 
     if(cap_set_proc(caps) != 0)
         sys_fatal("Could not set capabilities");
 
-    if(cap_set_ambient(CAP_SYS_ADMIN, CAP_SET) != 0)
-        sys_fatal("Could not set CAP_SYS_ADMIN cap");
-}
-
-void cap_system(const char* cmd)
-{
-    info("Running '{}'", cmd);
-
-    auto pid = fork();
-    if(pid == 0)
+    for(auto& cap : cap_list)
     {
-        set_ambient_caps();
-        system(cmd);
-        std::exit(0);
+        if(cap_set_ambient(cap, CAP_SET) != 0)
+            sys_fatal("Could not set ambient cap {}", cap);
     }
-
-    waitpid(pid, nullptr, 0);
 }
 
 static int pivot_root(const char *new_root, const char *put_old)
 {
     return syscall(SYS_pivot_root, new_root, put_old);
+}
+
+static bool is_mountpoint(const char* path)
+{
+    std::ifstream mountfile{"/proc/mounts"};
+    if(!mountfile)
+        sys_fatal("Could not open /proc/mounts");
+
+    for(std::string line; std::getline(mountfile, line);)
+    {
+        auto begin = line.find(' ');
+        if(begin == std::string::npos)
+        {
+            error("Could not parse mount line: '{}'", line);
+            continue;
+        }
+
+        auto end = line.find(' ', begin+1);
+        if(end == std::string::npos)
+        {
+            error("Could not parse mount line: '{}'", line);
+            continue;
+        }
+
+        std::string target = line.substr(begin+1, end-(begin+1));
+        std::ranges::replace(target, '\040', ' ');
+        if(target == path)
+            return true;
+    }
+
+    return false;
+}
+
+[[nodiscard]]
+static bool start_squashfuse(const char* file, std::size_t offset)
+{
+    // Run squashfuse
+    info("Mounting image...");
+    auto pid = fork();
+    if(pid == 0)
+    {
+        set_ambient_caps();
+
+        auto args = std::to_array({
+            strdup(SQUASHFUSE),
+            strdup("-f"),
+            strdup("-o"), strdup(fmt::format("offset={},uid={},gid={}", offset, getuid(), getgid()).c_str()),
+            strdup(file),
+            strdup(ROOTFS_PATH),
+            static_cast<char*>(nullptr)
+        });
+
+        if(execv(SQUASHFUSE, args.data()) != 0)
+            sys_fatal("Could not execute {}", SQUASHFUSE);
+    }
+
+    // Wait for mount success
+    for(int i = 0; i < 1000; ++i)
+    {
+        int wstatus = 0;
+        auto ret = waitpid(pid, &wstatus, WNOHANG);
+        if(ret < 0)
+            sys_fatal("Could not wait() for child");
+        if(ret != 0)
+        {
+            sys_fatal("squashfuse failed");
+            return false;
+        }
+
+        if(is_mountpoint(ROOTFS_PATH))
+            return true;
+
+        usleep(10*1000);
+    }
+
+    sys_fatal("Timeout!");
+    kill(pid, SIGKILL);
+    return false;
+}
+
+[[nodiscard]]
+static bool start_overlayfs()
+{
+    info("Mounting overlay...");
+
+    auto overlayArgs = fmt::format("lowerdir={},upperdir={},workdir={},noacl", ROOTFS_PATH, UPPER_PATH, WORK_PATH);
+
+    setenv("FUSE_OVERLAYFS_DISABLE_OVL_WHITEOUT", "y", 1);
+
+    auto pid = fork();
+    if(pid == 0)
+    {
+        set_ambient_caps();
+
+        auto args = std::to_array({
+            strdup(FUSE_OVERLAYFS),
+            strdup("-f"),
+            strdup("-o"), strdup(overlayArgs.c_str()),
+            strdup(FINAL_PATH),
+            static_cast<char*>(nullptr)
+        });
+
+        if(execv(FUSE_OVERLAYFS, args.data()) != 0)
+            sys_fatal("Could not execute {}", FUSE_OVERLAYFS);
+    }
+
+    // Wait for mount success
+    for(int i = 0; i < 1000; ++i)
+    {
+        int wstatus = 0;
+        auto ret = waitpid(pid, &wstatus, WNOHANG);
+        if(ret < 0)
+            sys_fatal("Could not wait() for child");
+        if(ret != 0)
+        {
+            sys_fatal("fuse-overlayfs failed");
+            return false;
+        }
+
+        if(is_mountpoint(FINAL_PATH))
+            return true;
+
+        usleep(10*1000);
+    }
+
+    sys_fatal("Timeout!");
+    kill(pid, SIGKILL);
+    return false;
+}
+
+template<std::convertible_to<const char*> ... Args>
+[[nodiscard]]
+static bool run_with_caps(const char* cmd, Args ... args)
+{
+    auto pid = fork();
+    if(pid == 0)
+    {
+        set_ambient_caps();
+
+        auto argsCopy = std::to_array<char*>({
+            strdup(cmd),
+            strdup(args)...,
+            static_cast<char*>(nullptr)
+        });
+
+        if(execvp(cmd, argsCopy.data()) != 0)
+            sys_fatal("Could not run {}", cmd);
+    }
+
+    int wstatus = 0;
+    if(waitpid(pid, &wstatus, 0) <= 0)
+        sys_fatal("Could not wait for cmd {}", cmd);
+
+    if(!WIFEXITED(wstatus) || WEXITSTATUS(wstatus) != 0)
+        fatal("{} failed", cmd);
+
+    return true;
 }
 
 int main(int argc, char** argv)
@@ -151,8 +304,6 @@ int main(int argc, char** argv)
     if(mount("tmpfs", SESSION_PATH, "tmpfs", 0, "size=100M") != 0)
         sys_fatal("Could not mount tmpfs");
 
-    info("tmpfs mounted.");
-
     // Create directories
     create_directory(ROOTFS_PATH);
     create_directory(UPPER_PATH);
@@ -177,39 +328,28 @@ int main(int argc, char** argv)
         if(!mySize)
             fatal("Could not get own ELF size");
 
-        info("My size: {} bytes", *mySize);
-
         std::size_t squashFuseOffset = *mySize;
         auto squashFuseSize = getELFSize(self.c_str(), squashFuseOffset);
         if(!squashFuseSize)
             fatal("Could not get squashfuse ELF size");
-
-        info("squashfuse size: {} bytes", *squashFuseSize);
 
         std::size_t overlayfsOffset = *mySize + *squashFuseSize;
         auto overlayfsSize = getELFSize(self.c_str(), overlayfsOffset);
         if(!overlayfsSize)
             fatal("Could not get fuse-overlayfs ELF size");
 
-        info("fuse-overlayfs size: {} bytes", *overlayfsSize);
-
         squashfsOffset = *mySize + *squashFuseSize + *overlayfsSize;
         squashfsSize = file_size(self.c_str()) - squashfsOffset;
 
         if(squashfsSize == 0)
         {
-            info("No squashfs directly attached.");
             if(argc < 2)
                 fatal("Need squashfs image as parameter or concatenated to the executable");
-            else
-                info("Using squashfs image {}", argv[1]);
 
             squashfsFile = argv[1];
             squashfsOffset = 0;
             squashfsSize = file_size(squashfsFile.c_str());
         }
-
-        info("squashfs image size: {} bytes", squashfsSize);
 
         auto writeTool = [&](const char* dest, std::size_t offset, std::size_t size){
             int fd_src = open(self.c_str(), O_RDONLY);
@@ -247,150 +387,90 @@ int main(int argc, char** argv)
         writeTool(FUSE_OVERLAYFS, overlayfsOffset, *overlayfsSize);
     }
 
-    // Things that need to be unmounted later on
-    std::vector<std::string> mountedFilesystems;
-    auto unmountGuard = sg::make_scope_guard([&]{
-        std::ifstream mountfile{"/proc/mounts"};
-        if(!mountfile)
-        {
-            sys_error("Could not open /proc/mounts");
-            return;
-        }
-
-        std::vector<std::string> mounts;
-
-        for(std::string line; std::getline(mountfile, line);)
-        {
-            auto begin = line.find(' ');
-            if(begin == std::string::npos)
-            {
-                error("Could not parse mount line: '{}'", line);
-                continue;
-            }
-
-            auto end = line.find(' ', begin+1);
-            if(end == std::string::npos)
-            {
-                error("Could not parse mount line: '{}'", line);
-                continue;
-            }
-
-            std::string target = line.substr(begin+1, end-(begin+1));
-            std::ranges::replace(target, '\040', ' ');
-
-            if(target.starts_with(static_cast<const char*>(SESSION_PATH)))
-                mounts.push_back(target);
-        }
-
-        info("Targets: {}", mounts);
-
-        for(auto& path : mounts | std::views::reverse)
-        {
-            info("Unmounting '{}'", path);
-            if(umount(path.c_str()) != 0)
-                sys_error("Could not unmount {}", path);
-        }
-    });
-
-    // Run squashfuse
-    info("Mounting image...");
     {
         auto pid = fork();
         if(pid == 0)
         {
-            set_ambient_caps();
+            // New process group
+            setpgid(0, 0);
 
-            auto args = std::to_array({
-                strdup(SQUASHFUSE),
-                strdup("-o"), strdup(fmt::format("offset={}", squashfsOffset).c_str()),
-                strdup(squashfsFile.c_str()),
-                strdup(ROOTFS_PATH),
-                static_cast<char*>(nullptr)
-            });
+            if(!start_squashfuse(squashfsFile.c_str(), squashfsOffset))
+                std::exit(1);
 
-            if(execv(SQUASHFUSE, args.data()) != 0)
-                sys_fatal("Could not execute {}", SQUASHFUSE.data);
+            if(!start_overlayfs())
+                std::exit(1);
+
+            // Stop ourselves, so that if we get orphaned, the kernel sends
+            // a SIGHUP,SIGCONT sequence to all processes in this process group
+            kill(getpid(), SIGSTOP);
+            std::exit(0);
         }
 
-        // Wait for mount success
         int wstatus = 0;
-        if(waitpid(pid, &wstatus, 0) <= 0)
-            sys_fatal("Could not wait() for child");
+        if(waitpid(pid, &wstatus, WUNTRACED) <= 0)
+            sys_fatal("Could not wait for child process");
 
-        if(!WIFEXITED(wstatus) || WEXITSTATUS(wstatus) != 0)
-            fatal("Could not mount squash image");
-
-        mountedFilesystems.push_back(ROOTFS_PATH);
+        if(!WIFSTOPPED(wstatus) || WSTOPSIG(wstatus) != SIGSTOP)
+            sys_fatal("Invalid mount result");
     }
-
-    // Overlay
-    auto overlayArgs = fmt::format("lowerdir={},upperdir={},workdir={}", ROOTFS_PATH, UPPER_PATH, WORK_PATH);
-    if(mount("none", FINAL_PATH, "overlay", 0, overlayArgs.data()) != 0)
-    {
-        sys_error("Could not mount overlay on {} with options '{}'", FINAL_PATH, overlayArgs);
-        return 1;
-    }
-    mountedFilesystems.push_back(FINAL_PATH);
 
     // Bind mounts
-    auto bindMounts = std::to_array({
-        "/dev",
-        "/etc/hosts",
-        "/proc",
-        "/sys",
+    struct Mount
+    {
+        const char* path;
+        int flags = MS_BIND|MS_REC;
+    };
+    auto bindMounts = std::to_array<Mount>({
+        {"/dev"},
+        {"/etc/hosts"},
+        {"/etc/passwd"},
+        {"/etc/group"},
+        {"/etc/resolv.conf"},
+        {"/proc"},
+        {"/sys"},
+        {"/tmp", MS_BIND},
+        {"/var/tmp", MS_BIND}
     });
     for(auto& path : bindMounts)
     {
-        std::string target = std::string{FINAL_PATH} + path;
-        if(mount(path, target.c_str(), nullptr, MS_BIND|MS_REC, nullptr) != 0)
+        std::string target = std::string{FINAL_PATH} + path.path;
+        if(mount(path.path, target.c_str(), nullptr, MS_BIND|MS_REC, nullptr) != 0)
         {
-            sys_error("Could not bind-mount {} into container", path);
+            sys_error("Could not bind-mount {} into container", path.path);
             return 1;
         }
         if(mount(nullptr, target.c_str(), nullptr, MS_REC|MS_SLAVE, nullptr) != 0)
         {
             sys_error("Could not change {} to MS_PRIVATE", target);
         }
-
-        mountedFilesystems.push_back(std::move(target));
     }
 
-    // Execute child
-    int pid = fork();
-    if(pid == 0)
+    // Run nvidia-container-cli
+    info("NVIDIA setup...");
+    if(!run_with_caps("nvidia-container-cli", "--user", "configure", "--device=all", "--compute", "--display", "--graphics", "--utility", "--video", "--no-cgroups", FINAL_PATH))
+        sys_error("Could not run nvidia-container-cli");
+
+    // Pivot into root
+    if(pivot_root(FINAL_PATH, FINAL_PATH) != 0)
     {
-        // Create mount namespace
-        if(unshare(CLONE_NEWNS) != 0)
-            sys_fatal("Could not create mount namespace");
-
-        info("pivot_root()");
-        if(pivot_root(FINAL_PATH, FINAL_PATH) != 0)
-        {
-            sys_error("Could not pivot_root()");
-            return 1;
-        }
-        if(chdir("/") != 0)
-        {
-            sys_error("Could not chdir(/)");
-            return 1;
-        }
-        if(umount2("/", MNT_DETACH) != 0)
-        {
-            sys_error("Could not detach old /");
-            return 1;
-        }
-
-        system("mount");
-        std::exit(0);
+        sys_error("Could not pivot_root()");
+        return 1;
+    }
+    if(chdir("/") != 0)
+    {
+        sys_error("Could not chdir(/)");
+        return 1;
+    }
+    if(umount2("/", MNT_DETACH) != 0)
+    {
+        sys_error("Could not detach old /");
+        return 1;
     }
 
-    int wstatus = 0;
-    if(waitpid(pid, &wstatus, 0) <= 0)
-        sys_fatal("Could not wait() for child");
+    info("Starting user command");
+    auto args = std::to_array({strdup("/bin/bash"), static_cast<char*>(nullptr)});
+    if(execv("/bin/bash", args.data()) != 0)
+        sys_fatal("Could not execute /bin/bash");
 
-    info("Cleanup!");
-    system("cat /proc/self/mountinfo");
-    cap_system("mount --make-rslave /tmp/tinyruntime-session/final/sys");
-    cap_system("umount -n -R /tmp/tinyruntime-session/final/sys");
     return 0;
 }
