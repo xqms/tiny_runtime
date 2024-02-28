@@ -12,6 +12,7 @@
 #include <ranges>
 #include <algorithm>
 #include <concepts>
+#include <filesystem>
 
 #include <sched.h>
 #include <stdio.h>
@@ -27,102 +28,21 @@
 #include <fmt/color.h>
 #include <fmt/compile.h>
 #include <fmt/ranges.h>
+#include <fmt/std.h>
 
+#include "config.h"
 #include "log.h"
+#include "os.h"
 #include "static_path.h"
 #include "elf_size.h"
 #include "scope_guard.h"
+#include "nvidia.h"
 
-constexpr auto SESSION_PATH = StaticPath("/tmp/tinyruntime-session");
-constexpr auto ROOTFS_PATH = SESSION_PATH / "root";
-constexpr auto FINAL_PATH = SESSION_PATH / "final";
-constexpr auto UPPER_PATH = SESSION_PATH / "upper";
-constexpr auto WORK_PATH = SESSION_PATH / "work";
-constexpr auto FUSE_OVERLAYFS = SESSION_PATH / "fuse-overlayfs";
-constexpr auto SQUASHFUSE = SESSION_PATH / "squashfuse";
-
-void create_directory(const char* path)
-{
-    if(mkdir(path, 0777) != 0)
-        sys_fatal("Could not create directory '{}'", path);
-}
-
-std::size_t file_size(const char* path)
-{
-    int fd = open(path, O_RDONLY);
-    if(fd < 0)
-        sys_fatal("Could not open myself");
-    auto off = lseek64(fd, 0, SEEK_END);
-    if(off == (off64_t)-1)
-        sys_fatal("Could not seek");
-    close(fd);
-
-    return off;
-}
-
-void set_ambient_caps()
-{
-    cap_t caps = cap_get_proc();
-    if(!caps)
-        sys_fatal("Could not get caps");
-
-    auto guard = sg::make_scope_guard([&]{ cap_free(caps); });
-
-    auto cap_list = std::to_array({
-        CAP_SYS_ADMIN, CAP_DAC_OVERRIDE, CAP_MKNOD, CAP_CHOWN,
-        CAP_DAC_OVERRIDE, CAP_DAC_READ_SEARCH, CAP_FOWNER,
-        CAP_KILL, CAP_NET_ADMIN, CAP_SETGID, CAP_SETPCAP,
-        CAP_SETUID, CAP_SYS_CHROOT, CAP_SYS_PTRACE
-    });
-    if(cap_set_flag(caps, CAP_INHERITABLE, cap_list.size(), cap_list.data(), CAP_SET) != 0)
-        sys_fatal("Could not set cap flags");
-    if(cap_set_flag(caps, CAP_PERMITTED, cap_list.size(), cap_list.data(), CAP_SET) != 0)
-        sys_fatal("Could not set cap flags");
-
-    if(cap_set_proc(caps) != 0)
-        sys_fatal("Could not set capabilities");
-
-    for(auto& cap : cap_list)
-    {
-        if(cap_set_ambient(cap, CAP_SET) != 0)
-            sys_fatal("Could not set ambient cap {}", cap);
-    }
-}
+namespace fs = std::filesystem;
 
 static int pivot_root(const char *new_root, const char *put_old)
 {
     return syscall(SYS_pivot_root, new_root, put_old);
-}
-
-static bool is_mountpoint(const char* path)
-{
-    std::ifstream mountfile{"/proc/mounts"};
-    if(!mountfile)
-        sys_fatal("Could not open /proc/mounts");
-
-    for(std::string line; std::getline(mountfile, line);)
-    {
-        auto begin = line.find(' ');
-        if(begin == std::string::npos)
-        {
-            error("Could not parse mount line: '{}'", line);
-            continue;
-        }
-
-        auto end = line.find(' ', begin+1);
-        if(end == std::string::npos)
-        {
-            error("Could not parse mount line: '{}'", line);
-            continue;
-        }
-
-        std::string target = line.substr(begin+1, end-(begin+1));
-        std::ranges::replace(target, '\040', ' ');
-        if(target == path)
-            return true;
-    }
-
-    return false;
 }
 
 [[nodiscard]]
@@ -130,23 +50,13 @@ static bool start_squashfuse(const char* file, std::size_t offset)
 {
     // Run squashfuse
     info("Mounting image...");
-    auto pid = fork();
-    if(pid == 0)
-    {
-        set_ambient_caps();
-
-        auto args = std::to_array({
-            strdup(SQUASHFUSE),
-            strdup("-f"),
-            strdup("-o"), strdup(fmt::format("offset={},uid={},gid={}", offset, getuid(), getgid()).c_str()),
-            strdup(file),
-            strdup(ROOTFS_PATH),
-            static_cast<char*>(nullptr)
-        });
-
-        if(execv(SQUASHFUSE, args.data()) != 0)
-            sys_fatal("Could not execute {}", SQUASHFUSE);
-    }
+    auto pid = os::fork_and_execv_with_caps(
+        config::SQUASHFUSE,
+        "-f",
+        "-o", fmt::format("offset={},uid={},gid={}", offset, getuid(), getgid()).c_str(),
+        file,
+        config::ROOTFS
+    );
 
     // Wait for mount success
     for(int i = 0; i < 1000; ++i)
@@ -161,7 +71,7 @@ static bool start_squashfuse(const char* file, std::size_t offset)
             return false;
         }
 
-        if(is_mountpoint(ROOTFS_PATH))
+        if(os::is_mountpoint(config::ROOTFS))
             return true;
 
         usleep(10*1000);
@@ -177,26 +87,13 @@ static bool start_overlayfs()
 {
     info("Mounting overlay...");
 
-    auto overlayArgs = fmt::format("lowerdir={},upperdir={},workdir={},noacl", ROOTFS_PATH, UPPER_PATH, WORK_PATH);
-
     setenv("FUSE_OVERLAYFS_DISABLE_OVL_WHITEOUT", "y", 1);
-
-    auto pid = fork();
-    if(pid == 0)
-    {
-        set_ambient_caps();
-
-        auto args = std::to_array({
-            strdup(FUSE_OVERLAYFS),
-            strdup("-f"),
-            strdup("-o"), strdup(overlayArgs.c_str()),
-            strdup(FINAL_PATH),
-            static_cast<char*>(nullptr)
-        });
-
-        if(execv(FUSE_OVERLAYFS, args.data()) != 0)
-            sys_fatal("Could not execute {}", FUSE_OVERLAYFS);
-    }
+    auto pid = os::fork_and_execv_with_caps(
+        config::FUSE_OVERLAYFS,
+        "-f",
+        "-o", fmt::format("lowerdir={},upperdir={},workdir={},noacl", config::ROOTFS, config::UPPER, config::WORK).c_str(),
+        config::FINAL
+    );
 
     // Wait for mount success
     for(int i = 0; i < 1000; ++i)
@@ -211,7 +108,7 @@ static bool start_overlayfs()
             return false;
         }
 
-        if(is_mountpoint(FINAL_PATH))
+        if(os::is_mountpoint(config::FINAL))
             return true;
 
         usleep(10*1000);
@@ -222,31 +119,28 @@ static bool start_overlayfs()
     return false;
 }
 
-template<std::convertible_to<const char*> ... Args>
 [[nodiscard]]
-static bool run_with_caps(const char* cmd, Args ... args)
+static bool bind_mount(const char* path, int flags = MS_BIND|MS_REC)
 {
-    auto pid = fork();
-    if(pid == 0)
+    namespace fs = std::filesystem;
+    fs::path target = std::string{config::FINAL} + path;
+    fs::path source = path;
+
+    if(fs::is_directory(source))
+        std::filesystem::create_directories(target);
+    else
+        std::filesystem::create_directories(target.parent_path());
+
+    if(mount(path, target.c_str(), nullptr, flags, nullptr) != 0)
     {
-        set_ambient_caps();
-
-        auto argsCopy = std::to_array<char*>({
-            strdup(cmd),
-            strdup(args)...,
-            static_cast<char*>(nullptr)
-        });
-
-        if(execvp(cmd, argsCopy.data()) != 0)
-            sys_fatal("Could not run {}", cmd);
+        sys_error("Could not bind-mount {} into container (flags={})", path, flags);
+        return false;
     }
-
-    int wstatus = 0;
-    if(waitpid(pid, &wstatus, 0) <= 0)
-        sys_fatal("Could not wait for cmd {}", cmd);
-
-    if(!WIFEXITED(wstatus) || WEXITSTATUS(wstatus) != 0)
-        fatal("{} failed", cmd);
+    if(mount(nullptr, target.c_str(), nullptr, (flags & MS_REC)|MS_SLAVE, nullptr) != 0)
+    {
+        sys_error("Could not change {} to MS_SLAVE", std::string{target});
+        return false;
+    }
 
     return true;
 }
@@ -256,7 +150,7 @@ int main(int argc, char** argv)
     int euid = geteuid();
     int egid = getegid();
 
-    mkdir(SESSION_PATH, 0777);
+    mkdir(config::SESSION, 0777);
 
     // Create user namespace
     if(unshare(CLONE_NEWUSER) != 0)
@@ -301,14 +195,18 @@ int main(int argc, char** argv)
         sys_fatal("Could not change to MS_PRIVATE");
 
     // Mount tmpfs in session dir
-    if(mount("tmpfs", SESSION_PATH, "tmpfs", 0, "size=100M") != 0)
+    if(mount("tmpfs", config::SESSION, "tmpfs", 0, "size=100M") != 0)
         sys_fatal("Could not mount tmpfs");
 
+    // and make it unbindable so it's not available in the container later
+    if(mount(nullptr, config::SESSION, nullptr, MS_UNBINDABLE, nullptr) != 0)
+        sys_fatal("Could not make session dir {} unbindable", config::SESSION);
+
     // Create directories
-    create_directory(ROOTFS_PATH);
-    create_directory(UPPER_PATH);
-    create_directory(WORK_PATH);
-    create_directory(FINAL_PATH);
+    os::create_directory(config::ROOTFS);
+    os::create_directory(config::UPPER);
+    os::create_directory(config::WORK);
+    os::create_directory(config::FINAL);
 
     // Find our executable
     auto self = []{
@@ -339,7 +237,7 @@ int main(int argc, char** argv)
             fatal("Could not get fuse-overlayfs ELF size");
 
         squashfsOffset = *mySize + *squashFuseSize + *overlayfsSize;
-        squashfsSize = file_size(self.c_str()) - squashfsOffset;
+        squashfsSize = os::file_size(self.c_str()) - squashfsOffset;
 
         if(squashfsSize == 0)
         {
@@ -348,7 +246,7 @@ int main(int argc, char** argv)
 
             squashfsFile = argv[1];
             squashfsOffset = 0;
-            squashfsSize = file_size(squashfsFile.c_str());
+            squashfsSize = os::file_size(squashfsFile.c_str());
         }
 
         auto writeTool = [&](const char* dest, std::size_t offset, std::size_t size){
@@ -383,8 +281,8 @@ int main(int argc, char** argv)
             }
         };
 
-        writeTool(SQUASHFUSE, squashFuseOffset, *squashFuseSize);
-        writeTool(FUSE_OVERLAYFS, overlayfsOffset, *overlayfsSize);
+        writeTool(config::SQUASHFUSE, squashFuseOffset, *squashFuseSize);
+        writeTool(config::FUSE_OVERLAYFS, overlayfsOffset, *overlayfsSize);
     }
 
     {
@@ -428,30 +326,30 @@ int main(int argc, char** argv)
         {"/etc/resolv.conf"},
         {"/proc"},
         {"/sys"},
-        {"/tmp", MS_BIND},
-        {"/var/tmp", MS_BIND}
+        {"/tmp"},
+        {"/var/tmp"}
     });
     for(auto& path : bindMounts)
     {
-        std::string target = std::string{FINAL_PATH} + path.path;
-        if(mount(path.path, target.c_str(), nullptr, MS_BIND|MS_REC, nullptr) != 0)
-        {
-            sys_error("Could not bind-mount {} into container", path.path);
-            return 1;
-        }
-        if(mount(nullptr, target.c_str(), nullptr, MS_REC|MS_SLAVE, nullptr) != 0)
-        {
-            sys_error("Could not change {} to MS_PRIVATE", target);
-        }
+        if(!bind_mount(path.path, path.flags))
+            fatal("Could not mount {}", path.path);
+    }
+
+    // Mount $HOME
+    if(auto home = getenv("HOME"))
+    {
+        if(!bind_mount(home))
+            fatal("Could not mount your home directory '{}'", home);
     }
 
     // Run nvidia-container-cli
     info("NVIDIA setup...");
-    if(!run_with_caps("nvidia-container-cli", "--user", "configure", "--device=all", "--compute", "--display", "--graphics", "--utility", "--video", "--no-cgroups", FINAL_PATH))
-        sys_error("Could not run nvidia-container-cli");
+    nvidia::configure();
+
+    fs::path cwd = fs::current_path();
 
     // Pivot into root
-    if(pivot_root(FINAL_PATH, FINAL_PATH) != 0)
+    if(pivot_root(config::FINAL, config::FINAL) != 0)
     {
         sys_error("Could not pivot_root()");
         return 1;
@@ -467,10 +365,19 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    info("Starting user command");
-    auto args = std::to_array({strdup("/bin/bash"), static_cast<char*>(nullptr)});
-    if(execv("/bin/bash", args.data()) != 0)
-        sys_fatal("Could not execute /bin/bash");
+    try
+    {
+        fs::current_path(cwd);
+    }
+    catch(fs::filesystem_error& e)
+    {
+        error("Could not cd to current directory ({}): {}", std::string{cwd}, e.what());
+    }
+
+    // info("Starting user command");
+    // auto args = std::to_array({strdup("/bin/bash"), static_cast<char*>(nullptr)});
+    // if(execv("/bin/bash", args.data()) != 0)
+    //     sys_fatal("Could not execute /bin/bash");
 
     return 0;
 }
