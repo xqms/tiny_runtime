@@ -1,5 +1,6 @@
 
 cmake_minimum_required(VERSION 3.12)
+
 project(tiny_runtime)
 
 include(ExternalProject)
@@ -22,10 +23,17 @@ ExternalProject_Add(fuse_overlayfs
     INSTALL_COMMAND ""
 )
 
+include(cmake/CPM.cmake)
+
+CPMAddPackage("gh:fmtlib/fmt#10.2.1")
+CPMAddPackage("gh:boost-ext/reflect@1.0.8")
+
+add_library(reflect INTERFACE)
+target_include_directories(reflect SYSTEM INTERFACE ${reflect_SOURCE_DIR})
+add_library(reflect::reflect ALIAS reflect)
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_FLAGS "-Wall")
-
-add_subdirectory(fmt)
 
 add_executable(tiny_runtime_starter
     tiny_runtime.cpp
@@ -33,9 +41,11 @@ add_executable(tiny_runtime_starter
     os.cpp
     nvidia.cpp
     ldcache.cpp
+    image.cpp
 )
 target_link_libraries(tiny_runtime_starter
     fmt::fmt
+    reflect::reflect
     cap
 )
 target_link_options(tiny_runtime_starter PRIVATE

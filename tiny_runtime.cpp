@@ -7,11 +7,8 @@
 #include <cstring>
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <vector>
-#include <ranges>
 #include <algorithm>
-#include <concepts>
 #include <filesystem>
 
 #include <sched.h>
@@ -37,6 +34,7 @@
 #include "elf_size.h"
 #include "scope_guard.h"
 #include "nvidia.h"
+#include "image.h"
 
 namespace fs = std::filesystem;
 
@@ -194,9 +192,9 @@ int main(int argc, char** argv)
     }();
 
     // Write utilities
-    std::string squashfsFile = self;
-    std::size_t squashfsOffset = 0;
-    std::size_t squashfsSize = 0;
+    std::string imageFile = self;
+    std::size_t imageOffset = 0;
+    std::size_t imageSize = 0;
     {
         auto mySize = getELFSize(self.c_str(), 0);
         if(!mySize)
@@ -212,17 +210,17 @@ int main(int argc, char** argv)
         if(!overlayfsSize)
             fatal("Could not get fuse-overlayfs ELF size");
 
-        squashfsOffset = *mySize + *squashFuseSize + *overlayfsSize;
-        squashfsSize = os::file_size(self.c_str()) - squashfsOffset;
+        imageOffset = *mySize + *squashFuseSize + *overlayfsSize;
+        imageSize = os::file_size(self.c_str()) - imageOffset;
 
-        if(squashfsSize == 0)
+        if(imageSize == 0)
         {
             if(argc < 2)
-                fatal("Need squashfs image as parameter or concatenated to the executable");
+                fatal("Need container image as parameter or concatenated to the executable");
 
-            squashfsFile = argv[1];
-            squashfsOffset = 0;
-            squashfsSize = os::file_size(squashfsFile.c_str());
+            imageFile = argv[1];
+            imageOffset = 0;
+            imageSize = os::file_size(imageFile.c_str());
             containerArg = 2;
         }
 
@@ -262,6 +260,21 @@ int main(int argc, char** argv)
         writeTool(config::FUSE_OVERLAYFS, overlayfsOffset, *overlayfsSize);
     }
 
+    // Find squashfs image
+    std::size_t squashFSOffset = 0;
+    {
+        int fd = open(imageFile.c_str(), O_RDONLY);
+        if(fd < 0)
+            sys_fatal("Could not open image file {}", imageFile);
+
+        auto guard = sg::make_scope_guard([&]{ close(fd); });
+
+        if(auto off = image::findSquashFS(fd, imageOffset))
+            squashFSOffset = *off;
+        else
+            fatal("Could not find squashFS image inside container file");
+    }
+
     {
         auto pid = fork();
         if(pid == 0)
@@ -269,7 +282,7 @@ int main(int argc, char** argv)
             // New process group
             setpgid(0, 0);
 
-            if(!start_squashfuse(squashfsFile.c_str(), squashfsOffset))
+            if(!start_squashfuse(imageFile.c_str(), squashFSOffset))
                 std::exit(1);
 
             if(!start_overlayfs())
@@ -365,6 +378,19 @@ int main(int argc, char** argv)
 
         if(execv("/.singularity.d/runscript", args.data()) != 0)
             sys_fatal("Could not execute /.singularity.d/runscript");
+    }
+    else if(fs::exists("/etc/rc"))
+    {
+        std::vector<char*> args;
+        args.push_back(strdup("rc"));
+
+        for(int i = containerArg; i < argc; ++i)
+            args.push_back(strdup(argv[i]));
+
+        args.push_back(nullptr);
+
+        if(execv("/etc/rc", args.data()) != 0)
+            sys_fatal("Could not execute /etc/rc");
     }
     else
     {
