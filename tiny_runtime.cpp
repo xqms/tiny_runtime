@@ -10,6 +10,7 @@
 #include <vector>
 #include <algorithm>
 #include <filesystem>
+#include <span>
 
 #include <sched.h>
 #include <stdio.h>
@@ -35,6 +36,7 @@
 #include "scope_guard.h"
 #include "nvidia.h"
 #include "image.h"
+#include "argparser.h"
 
 namespace fs = std::filesystem;
 
@@ -117,8 +119,35 @@ static bool start_overlayfs()
     return false;
 }
 
+struct Args
+{
+    bool help = false;
+    std::vector<std::string> bind;
+};
+
+void usage()
+{
+    fmt::print(R"(EOS
+Usage: tiny-runtime [options] [cmd to execute in container...]
+
+Options:
+  --help                   This help screen
+  --bind PATH              Make PATH from outside available as PATH in container
+  --bind OUTSIDE:INSIDE    Make OUTSIDE available as INSIDE in container
+EOS)");
+}
+
 int main(int argc, char** argv)
 {
+    Args args;
+    argparser::parse(args, std::span<char*>(argv+1, argc-1));
+
+    // if(args.help)
+    // {
+    //     usage();
+    //     return 0;
+    // }
+
     int euid = geteuid();
     int egid = getegid();
 
@@ -289,7 +318,8 @@ int main(int argc, char** argv)
                 std::exit(1);
 
             // Stop ourselves, so that if we get orphaned, the kernel sends
-            // a SIGHUP,SIGCONT sequence to all processes in this process group
+            // a SIGHUP,SIGCONT sequence to all processes in this process group.
+            // This trick is stolen from enroot.
             kill(getpid(), SIGSTOP);
             std::exit(0);
         }
@@ -317,7 +347,8 @@ int main(int argc, char** argv)
         {"/proc"},
         {"/sys"},
         {"/tmp"},
-        {"/var/tmp"}
+        {"/var/tmp"},
+        {"/run"},
     });
     for(auto& path : bindMounts)
     {
