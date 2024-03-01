@@ -88,7 +88,9 @@ namespace detail
     template<int N, typename T, typename ArgClass>
     auto argInfo(ArgClass& args)
     {
-        if(reflect::member_name<N, ArgClass>() == "remaining")
+        using namespace std::literals;
+
+        if(reflect::member_name<N, ArgClass>() == "remaining"sv)
             return ArgInfo<ArgClass, T>{};
 
         return ArgInfo<ArgClass, T>{
@@ -96,6 +98,46 @@ namespace detail
             &reflect::get<N>(args)
         };
     }
+
+    template<class ArgClass, int N>
+    void serializeMember(std::vector<std::string>& out, const ArgClass& args)
+    {
+        using namespace std::literals;
+
+        if(reflect::member_name<N, ArgClass>() == "remaining"sv)
+            return;
+
+        const auto& value = reflect::get<N>(args);
+
+        std::string name = std::string{reflect::member_name<N>(args)};
+        std::ranges::replace(name, '_', '-');
+
+        using ValueType = UnwrapOption<std::remove_cvref_t<decltype(value)>>;
+
+        // Is this an std::vector?
+        if constexpr(requires { []<typename U>(const std::vector<U>&){}(ValueType{}); })
+        {
+            for(auto& entry : value)
+                out.push_back(fmt::format("--{}={}", name, entry));
+        }
+        // or an std::optional?
+        else if constexpr(requires { []<typename U>(const std::optional<U>&){}(ValueType{}); })
+        {
+            if(value)
+                out.push_back(fmt::format("--{}={}", name, *value));
+        }
+        // or a bool?
+        else if constexpr(std::is_same_v<ValueType, bool>)
+        {
+            if(value)
+                out.push_back(fmt::format("--{}", name));
+        }
+        // or a straight value?
+        else
+        {
+            out.push_back(fmt::format("--{}={}", name, static_cast<const ValueType&>(value)));
+        }
+    };
 }
 
 class ArgumentException : public std::runtime_error
@@ -214,6 +256,20 @@ void parse(ArgClass& args, const Container& arguments)
         if(!found)
             throw ArgumentException{fmt::format("Unknown argument --{}", key)};
     }
+}
+
+template<class ArgClass>
+std::vector<std::string> serialize(const ArgClass& args)
+{
+    using namespace std::literals;
+
+    std::vector<std::string> data;
+
+    [&]<auto ... Ns>(std::index_sequence<Ns...>) {
+        (... , detail::serializeMember<ArgClass, Ns>(data, args));
+    }(std::make_index_sequence<reflect::size<ArgClass>()>());
+
+    return data;
 }
 
 }
