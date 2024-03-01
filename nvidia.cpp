@@ -71,7 +71,7 @@ bool configure()
     {
         if(auto path = os::find_binary(binary))
         {
-            if(!os::bind_mount(path->string().c_str(), MS_BIND))
+            if(!os::bind_mount(path->string().c_str(), {}, MS_BIND))
                 error("Could not bind mount '{}'", *path);
         }
     }

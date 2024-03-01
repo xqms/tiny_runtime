@@ -8,6 +8,8 @@
 #include <fstream>
 #include <ranges>
 
+#include <fmt/std.h>
+
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/capability.h>
@@ -103,11 +105,12 @@ bool is_mountpoint(const char* path)
 }
 
 [[nodiscard]]
-bool bind_mount(const char* path, int flags)
+bool bind_mount(const std::filesystem::path& outside, const std::optional<std::filesystem::path>& inside, int flags)
 {
     namespace fs = std::filesystem;
-    fs::path target = std::string{config::FINAL} + path;
-    fs::path source = path;
+    fs::path source = outside;
+    fs::path targetInContainer = (inside ? (*inside) : outside);
+    fs::path target = fs::path{config::FINAL} / targetInContainer.relative_path();
 
     if(fs::is_directory(source))
         std::filesystem::create_directories(target);
@@ -121,14 +124,14 @@ bool bind_mount(const char* path, int flags)
         }
     }
 
-    if(mount(path, target.c_str(), nullptr, flags, nullptr) != 0)
+    if(mount(source.c_str(), target.c_str(), nullptr, flags, nullptr) != 0)
     {
-        sys_error("Could not bind-mount {} into container (flags={})", path, flags);
+        sys_error("Could not bind-mount {} to {} in container (flags={})", source, targetInContainer, flags);
         return false;
     }
     if(mount(nullptr, target.c_str(), nullptr, (flags & MS_REC)|MS_SLAVE, nullptr) != 0)
     {
-        sys_error("Could not change {} to MS_SLAVE", std::string{target});
+        sys_error("Could not change {} to MS_SLAVE", target);
         return false;
     }
 

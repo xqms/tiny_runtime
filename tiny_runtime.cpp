@@ -45,6 +45,78 @@ static int pivot_root(const char *new_root, const char *put_old)
     return syscall(SYS_pivot_root, new_root, put_old);
 }
 
+struct Segment
+{
+    std::size_t offset;
+    std::size_t size;
+};
+struct Segments
+{
+    Segment squashFuse;
+    Segment fuseOverlay;
+    Segment image;
+};
+
+static Segments findSegments(const char* file)
+{
+    Segments segments;
+
+    if(auto mySize = getELFSize(file, 0))
+        segments.squashFuse.offset = *mySize;
+    else
+        fatal("Could not get own ELF size");
+
+    if(auto size = getELFSize(file, segments.squashFuse.offset))
+        segments.squashFuse.size = *size;
+    else
+        fatal("Could not get squashfuse ELF size");
+
+    segments.fuseOverlay.offset = segments.squashFuse.offset + segments.squashFuse.size;
+    if(auto size = getELFSize(file, segments.fuseOverlay.offset))
+        segments.fuseOverlay.size = *size;
+    else
+        fatal("Could not get fuse-overlayfs ELF size");
+
+    segments.image.offset = segments.fuseOverlay.offset + segments.fuseOverlay.size;
+    segments.image.size = os::file_size(file) - segments.image.offset;
+
+    return segments;
+}
+
+static void writeTool(const char* file, const Segment& segment, const char* dest)
+{
+    int fd_src = open(file, O_RDONLY);
+    if(fd_src < 0)
+        sys_fatal("Could not open {}", file);
+
+    auto guard_src = sg::make_scope_guard([&]{ close(fd_src); });
+
+    if(lseek64(fd_src, segment.offset, SEEK_SET) != static_cast<off64_t>(segment.offset))
+        sys_fatal("Could not seek to tool at offset {} in {}", segment.offset, file);
+
+    int fd_dst = open(dest, O_RDWR | O_CREAT, 0755);
+    if(fd_dst < 0)
+        sys_fatal("Could not create tool file {}", dest);
+
+    auto guard_dst = sg::make_scope_guard([&]{ close(fd_dst); });
+
+    std::array<char, 128*1024> buf;
+    std::size_t size = segment.size;
+    while(size > 0)
+    {
+        ssize_t bsize = std::min(buf.size(), size);
+
+        ssize_t ret = read(fd_src, buf.data(), bsize);
+        if(ret != bsize)
+            sys_fatal("Could not read from {}", file);
+
+        if(write(fd_dst, buf.data(), bsize) != bsize)
+            sys_fatal("Could not write to {}", dest);
+
+        size -= bsize;
+    }
+}
+
 [[nodiscard]]
 static bool start_squashfuse(const char* file, std::size_t offset)
 {
@@ -121,20 +193,26 @@ static bool start_overlayfs()
 
 struct Args
 {
-    bool help = false;
+    argparser::Option<bool, {.shortName='h'}> help = false;
+
+    std::optional<std::string> image;
     std::vector<std::string> bind;
+
+    std::vector<std::string> remaining;
 };
 
 void usage()
 {
-    fmt::print(R"(EOS
+    fmt::print(R"EOS(
 Usage: tiny-runtime [options] [cmd to execute in container...]
 
 Options:
   --help                   This help screen
+  --image IMAGE            Use image IMAGE
   --bind PATH              Make PATH from outside available as PATH in container
   --bind OUTSIDE:INSIDE    Make OUTSIDE available as INSIDE in container
-EOS)");
+
+)EOS");
 }
 
 int main(int argc, char** argv)
@@ -142,16 +220,41 @@ int main(int argc, char** argv)
     Args args;
     argparser::parse(args, std::span<char*>(argv+1, argc-1));
 
-    // if(args.help)
-    // {
-    //     usage();
-    //     return 0;
-    // }
+    if(args.help)
+    {
+        usage();
+        return 0;
+    }
+
+    // Find our executable
+    auto self = []{
+        char buf[1024];
+        auto ret = readlink("/proc/self/exe", buf, sizeof(buf));
+        if(ret < 0 || ret == sizeof(buf))
+            sys_fatal("Could not read link /proc/self/exe");
+        return std::string{buf};
+    }();
+
+    Segments segments = findSegments(self.c_str());
+
+    struct
+    {
+        std::string file;
+        std::size_t offset;
+    } image;
+
+    if(args.image)
+        image = {*args.image, 0};
+    else
+    {
+        if(segments.image.size == 0)
+            fatal("Either need --image or an image file concatenated to tiny_runtime");
+
+        image = {self, segments.image.offset};
+    }
 
     int euid = geteuid();
     int egid = getegid();
-
-    int containerArg = 1;
 
     mkdir(config::SESSION, 0777);
 
@@ -211,94 +314,20 @@ int main(int argc, char** argv)
     os::create_directory(config::WORK);
     os::create_directory(config::FINAL);
 
-    // Find our executable
-    auto self = []{
-        char buf[1024];
-        auto ret = readlink("/proc/self/exe", buf, sizeof(buf));
-        if(ret < 0 || ret == sizeof(buf))
-            sys_fatal("Could not read link /proc/self/exe");
-        return std::string{buf};
-    }();
-
-    // Write utilities
-    std::string imageFile = self;
-    std::size_t imageOffset = 0;
-    std::size_t imageSize = 0;
-    {
-        auto mySize = getELFSize(self.c_str(), 0);
-        if(!mySize)
-            fatal("Could not get own ELF size");
-
-        std::size_t squashFuseOffset = *mySize;
-        auto squashFuseSize = getELFSize(self.c_str(), squashFuseOffset);
-        if(!squashFuseSize)
-            fatal("Could not get squashfuse ELF size");
-
-        std::size_t overlayfsOffset = *mySize + *squashFuseSize;
-        auto overlayfsSize = getELFSize(self.c_str(), overlayfsOffset);
-        if(!overlayfsSize)
-            fatal("Could not get fuse-overlayfs ELF size");
-
-        imageOffset = *mySize + *squashFuseSize + *overlayfsSize;
-        imageSize = os::file_size(self.c_str()) - imageOffset;
-
-        if(imageSize == 0)
-        {
-            if(argc < 2)
-                fatal("Need container image as parameter or concatenated to the executable");
-
-            imageFile = argv[1];
-            imageOffset = 0;
-            imageSize = os::file_size(imageFile.c_str());
-            containerArg = 2;
-        }
-
-        auto writeTool = [&](const char* dest, std::size_t offset, std::size_t size){
-            int fd_src = open(self.c_str(), O_RDONLY);
-            if(fd_src < 0)
-                sys_fatal("Could not open {}", self);
-
-            auto guard_src = sg::make_scope_guard([&]{ close(fd_src); });
-
-            if(lseek64(fd_src, offset, SEEK_SET) != static_cast<off64_t>(offset))
-                sys_fatal("Could not seek to tool at offset {} in {}", offset, self.c_str());
-
-            int fd_dst = open(dest, O_RDWR | O_CREAT, 0755);
-            if(fd_dst < 0)
-                sys_fatal("Could not create tool file {}", dest);
-
-            auto guard_dst = sg::make_scope_guard([&]{ close(fd_dst); });
-
-            std::array<char, 128*1024> buf;
-            while(size > 0)
-            {
-                ssize_t bsize = std::min(buf.size(), size);
-
-                ssize_t ret = read(fd_src, buf.data(), bsize);
-                if(ret != bsize)
-                    sys_fatal("Could not read from {}", self);
-
-                if(write(fd_dst, buf.data(), bsize) != bsize)
-                    sys_fatal("Could not write to {}", dest);
-
-                size -= bsize;
-            }
-        };
-
-        writeTool(config::SQUASHFUSE, squashFuseOffset, *squashFuseSize);
-        writeTool(config::FUSE_OVERLAYFS, overlayfsOffset, *overlayfsSize);
-    }
+    // Write tools
+    writeTool(self.c_str(), segments.squashFuse, config::SQUASHFUSE);
+    writeTool(self.c_str(), segments.fuseOverlay, config::FUSE_OVERLAYFS);
 
     // Find squashfs image
     std::size_t squashFSOffset = 0;
     {
-        int fd = open(imageFile.c_str(), O_RDONLY);
+        int fd = open(image.file.c_str(), O_RDONLY);
         if(fd < 0)
-            sys_fatal("Could not open image file {}", imageFile);
+            sys_fatal("Could not open image file {}", image.file);
 
         auto guard = sg::make_scope_guard([&]{ close(fd); });
 
-        if(auto off = image::findSquashFS(fd, imageOffset))
+        if(auto off = image::findSquashFS(fd, image.offset))
             squashFSOffset = *off;
         else
             fatal("Could not find squashFS image inside container file");
@@ -311,7 +340,7 @@ int main(int argc, char** argv)
             // New process group
             setpgid(0, 0);
 
-            if(!start_squashfuse(imageFile.c_str(), squashFSOffset))
+            if(!start_squashfuse(image.file.c_str(), squashFSOffset))
                 std::exit(1);
 
             if(!start_overlayfs())
@@ -333,27 +362,22 @@ int main(int argc, char** argv)
     }
 
     // Bind mounts
-    struct Mount
-    {
-        const char* path;
-        int flags = MS_BIND|MS_REC;
-    };
-    auto bindMounts = std::to_array<Mount>({
-        {"/dev"},
-        {"/etc/hosts"},
-        {"/etc/passwd"},
-        {"/etc/group"},
-        {"/etc/resolv.conf"},
-        {"/proc"},
-        {"/sys"},
-        {"/tmp"},
-        {"/var/tmp"},
-        {"/run"},
+    auto bindMounts = std::to_array({
+        "/dev",
+        "/etc/hosts",
+        "/etc/passwd",
+        "/etc/group",
+        "/etc/resolv.conf",
+        "/proc",
+        "/sys",
+        "/tmp",
+        "/var/tmp",
+        "/run"
     });
     for(auto& path : bindMounts)
     {
-        if(!os::bind_mount(path.path, path.flags))
-            fatal("Could not mount {}", path.path);
+        if(!os::bind_mount(path))
+            fatal("Could not mount {}", path);
     }
 
     // Mount $HOME
@@ -361,6 +385,22 @@ int main(int argc, char** argv)
     {
         if(!os::bind_mount(home))
             fatal("Could not mount your home directory '{}'", home);
+    }
+
+    // Custom mounts
+    for(auto& path : args.bind)
+    {
+        auto sep = path.find(':');
+        if(sep != path.npos)
+        {
+            auto outside = path.substr(0, sep);
+            auto inside = path.substr(sep+1);
+            if(!os::bind_mount(outside, inside))
+                fatal("Could not bind {} to {} inside container", outside, inside);
+        }
+        else
+            if(!os::bind_mount(path))
+                fatal("Could not bind {} inside container", path);
     }
 
     // Mount nvidia tools & libraries
@@ -399,28 +439,28 @@ int main(int argc, char** argv)
 
     if(fs::exists("/.singularity.d/runscript"))
     {
-        std::vector<char*> args;
-        args.push_back(strdup("runscript"));
+        std::vector<char*> runArgs;
+        runArgs.push_back(strdup("runscript"));
 
-        for(int i = containerArg; i < argc; ++i)
-            args.push_back(strdup(argv[i]));
+        for(auto& arg : args.remaining)
+            runArgs.push_back(strdup(arg.c_str()));
 
-        args.push_back(nullptr);
+        runArgs.push_back(nullptr);
 
-        if(execv("/.singularity.d/runscript", args.data()) != 0)
+        if(execv("/.singularity.d/runscript", runArgs.data()) != 0)
             sys_fatal("Could not execute /.singularity.d/runscript");
     }
     else if(fs::exists("/etc/rc"))
     {
-        std::vector<char*> args;
-        args.push_back(strdup("rc"));
+        std::vector<char*> runArgs;
+        runArgs.push_back(strdup("runscript"));
 
-        for(int i = containerArg; i < argc; ++i)
-            args.push_back(strdup(argv[i]));
+        for(auto& arg : args.remaining)
+            runArgs.push_back(strdup(arg.c_str()));
 
-        args.push_back(nullptr);
+        runArgs.push_back(nullptr);
 
-        if(execv("/etc/rc", args.data()) != 0)
+        if(execv("/etc/rc", runArgs.data()) != 0)
             sys_fatal("Could not execute /etc/rc");
     }
     else

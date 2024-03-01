@@ -69,7 +69,7 @@ bool run_with_caps(const char* cmd, Args&& ... args)
 }
 
 [[nodiscard]]
-bool bind_mount(const char* path, int flags = MS_BIND|MS_REC);
+bool bind_mount(const std::filesystem::path& outside, const std::optional<std::filesystem::path>& inside = {}, int flags = MS_BIND|MS_REC);
 
 [[nodiscard]]
 std::optional<std::filesystem::path> find_binary(const std::string_view& name);
