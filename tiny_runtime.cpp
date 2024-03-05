@@ -252,7 +252,7 @@ struct Args
 void usage()
 {
     fmt::print(R"EOS(
-Usage: tiny-runtime [options] [cmd to execute in container...]
+Usage: tiny_runtime [options] [cmd to execute in container...]
 
 Options:
   --help                   This help screen.
