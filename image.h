@@ -6,10 +6,11 @@
 
 #include <cstdlib>
 #include <optional>
+#include <istream>
 
 namespace image
 {
-    std::optional<std::size_t> findSquashFS(int fd, std::size_t offset);
+    std::optional<std::size_t> findSquashFS(std::istream& stream, std::size_t globalOffset);
 }
 
 #endif

@@ -42,6 +42,7 @@ add_executable(tiny_runtime_starter
     nvidia.cpp
     ldcache.cpp
     image.cpp
+    log.cpp
 )
 target_link_libraries(tiny_runtime_starter
     fmt::fmt
@@ -61,6 +62,7 @@ add_custom_command(
     COMMAND strip -o squashfuse.stripped tools/bin/squashfuse_ll
     COMMAND strip -o overlayfs.stripped "${FUSE_OVERLAYFS_OUT}"
     COMMAND cat tiny_runtime.stripped squashfuse.stripped overlayfs.stripped > tiny_runtime
+    # COMMAND cat tiny_runtime_starter tools/bin/squashfuse_ll "${FUSE_OVERLAYFS_OUT}" > tiny_runtime
     COMMAND chmod a+x tiny_runtime
 )
 

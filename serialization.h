@@ -21,10 +21,10 @@ namespace serialization
         struct False : std::bool_constant<false> { };
 
         template<typename T>
-        consteval bool isMemcpyCapable();
+        constexpr bool isMemcpyCapable();
 
         template<typename T, int N>
-        consteval bool isMemberMemcpyCapable(std::size_t& offset)
+        constexpr bool isMemberMemcpyCapable(std::size_t& offset)
         {
             if constexpr(std::is_aggregate_v<T>)
             {
@@ -33,7 +33,7 @@ namespace serialization
                     return false;
             }
 
-            if constexpr(reflect::offset_of<N, T>() != offset)
+            if(reflect::offset_of<N, T>() != offset)
                 return false;
 
             offset += reflect::size_of<N, T>();
@@ -41,18 +41,24 @@ namespace serialization
         }
 
         template<typename T>
-        consteval bool isMemcpyCapable()
+        constexpr bool isMemcpyCapable()
         {
-            if(!std::is_standard_layout_v<T> || !std::is_trivial_v<T>)
+            if constexpr(std::is_integral_v<T> || std::is_enum_v<T>)
+                return true;
+            else if constexpr(!std::is_aggregate_v<T> || !std::is_standard_layout_v<T> || !std::is_trivial_v<T>)
                 return false;
+            else if constexpr(requires (T x){ []<typename U, std::size_t N>(const std::array<U, N>&){}(x); })
+                return true;
+            else
+            {
+                constexpr int numFields = reflect::size<T>();
 
-            constexpr int numFields = reflect::size<T>();
+                std::size_t offset = 0;
 
-            std::size_t offset = 0;
-
-            return [&]<auto ... Ns>(std::index_sequence<Ns...>) {
-                (... && isMemberMemcpyCapable<T, Ns>(offset));
-            }(std::make_index_sequence<numFields>());
+                return [&]<auto ... Ns>(std::index_sequence<Ns...>) {
+                    return (... && isMemberMemcpyCapable<T, Ns>(offset));
+                }(std::make_index_sequence<numFields>());
+            }
         }
 
         template<class T>
@@ -67,14 +73,9 @@ namespace serialization
     [[nodiscard]]
     bool deserializeInto(Stream& stream, T& dest, std::size_t sizeLimit = 1024)
     {
-        if constexpr(std::is_integral_v<T>)
+        if constexpr(std::is_integral_v<T> || std::is_enum_v<T>)
         {
             stream.read(reinterpret_cast<char*>(&dest), sizeof(T));
-            return !!stream;
-        }
-        else if constexpr(detail::isMemcpyCapable<T>())
-        {
-            stream.read(reinterpet_cast<char*>(&*dest), sizeof(T));
             return !!stream;
         }
         else if constexpr(requires { [&]<typename U>(std::vector<U>&){}(dest); })
@@ -113,9 +114,17 @@ namespace serialization
         }
         else if constexpr(std::is_aggregate_v<T>)
         {
-            return [&]<auto ... Ns>(std::index_sequence<Ns...>) {
-                (... , deserializeInto(stream, &reflect::get<Ns>(dest)));
-            }(std::make_index_sequence<reflect::size<T>()>());
+            if constexpr(detail::isMemcpyCapable<T>())
+            {
+                stream.read(reinterpret_cast<char*>(&dest), sizeof(T));
+                return !!stream;
+            }
+            else
+            {
+                return [&]<auto ... Ns>(std::index_sequence<Ns...>) {
+                    return (... && deserializeInto(stream, reflect::get<Ns>(dest)));
+                }(std::make_index_sequence<reflect::size<T>()>());
+            }
         }
         else
         {
@@ -137,14 +146,14 @@ namespace serialization
     [[nodiscard]]
     bool serializeInto(const T& src, Stream& out)
     {
-        if constexpr(std::is_integral_v<T>)
+        if constexpr(std::is_integral_v<T> || std::is_enum_v<T>)
         {
             out.write(reinterpret_cast<const char*>(&src), sizeof(T));
             return !!out;
         }
         else if constexpr(detail::isMemcpyCapable<T>())
         {
-            out.write(reinterpet_cast<const char*>(&*src), sizeof(T));
+            out.write(reinterpret_cast<const char*>(&src), sizeof(T));
             return !!out;
         }
         else if constexpr(requires { [&]<typename U>(const std::vector<U>&){}(src); })
@@ -173,7 +182,17 @@ namespace serialization
         }
         else if constexpr(std::is_aggregate_v<T>)
         {
-            static_assert(false);
+            if constexpr(detail::isMemcpyCapable<T>())
+            {
+                out.write(reinterpret_cast<const char*>(&src), sizeof(T));
+                return !!out;
+            }
+            else
+            {
+                return [&]<auto ... Ns>(std::index_sequence<Ns...>) {
+                    return (... && serializeInto(reflect::get<Ns>(src), out));
+                }(std::make_index_sequence<reflect::size<T>()>());
+            }
         }
         else
         {

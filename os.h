@@ -79,6 +79,9 @@ std::optional<std::filesystem::path> find_binary(const std::string_view& name);
 bool prepend_space_to_file(const std::filesystem::path& path, std::size_t amount);
 
 [[nodiscard]]
+bool remove_leading_space(const std::filesystem::path& path, std::size_t amount);
+
+[[nodiscard]]
 bool copy_from_to_fd(int srcFD, int dstFD, const std::optional<std::size_t>& maxSize = {});
 
 [[nodiscard]]

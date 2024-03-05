@@ -5,12 +5,9 @@
 
 #include <elf.h>
 #include <byteswap.h>
-#include <stdio.h>
 #include <stdint.h>
-#include <errno.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <string.h>
 #include <fcntl.h>
 
 #include "log.h"
@@ -37,7 +34,7 @@ std::optional<std::size_t> getELFSize(const char* file, std::size_t offset)
 
     // Read header
     Elf64_Ehdr ehdr{};
-    int ret = pread(fd, ehdr.e_ident, EI_NIDENT, offset);
+    int ret = pread(fd, reinterpret_cast<char*>(ehdr.e_ident), EI_NIDENT, offset);
     if(ret < 0)
     {
         sys_error("{}: Could not read ELF header", file);
@@ -46,6 +43,12 @@ std::optional<std::size_t> getELFSize(const char* file, std::size_t offset)
     if(ret != EI_NIDENT)
     {
         error("{}: Could not read ELF header: Short read ({})", file, ret);
+        return {};
+    }
+
+    if(std::string_view{reinterpret_cast<char*>(&ehdr.e_ident[EI_MAG0]), 4} != std::string_view{ELFMAG})
+    {
+        error("{}: Invalid ELF magic", file);
         return {};
     }
 
@@ -82,5 +85,32 @@ std::optional<std::size_t> getELFSize(const char* file, std::size_t offset)
         ehdr.e_shnum = bswap_64(ehdr.e_shnum);
     }
 
-    return(ehdr.e_shoff + (ehdr.e_shentsize * ehdr.e_shnum));
+    return ehdr.e_shoff + (ehdr.e_shentsize * ehdr.e_shnum);
+}
+
+bool isELF(const char* file)
+{
+    int fd = open(file, O_RDONLY);
+    if(fd < 0)
+    {
+        sys_error("Could not open file '{}'", file);
+        return false;
+    }
+    auto guard = sg::make_scope_guard([&]{ close(fd); });
+
+    // Read header
+    Elf64_Ehdr ehdr{};
+    int ret = read(fd, reinterpret_cast<char*>(ehdr.e_ident), EI_NIDENT);
+    if(ret < 0)
+    {
+        sys_error("{}: Could not read ELF header", file);
+        return {};
+    }
+    if(ret != EI_NIDENT)
+        return false;
+
+    if(std::string_view{reinterpret_cast<char*>(&ehdr.e_ident[EI_MAG0]), 4} != std::string_view{ELFMAG})
+        return false;
+
+    return true;
 }

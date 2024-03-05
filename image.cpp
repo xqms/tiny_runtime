@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #include "log.h"
+#include "serialization.h"
 
 using namespace std::literals;
 
@@ -22,84 +23,15 @@ namespace image
 
 namespace
 {
-    template<int N>
-    struct SrcInfo
+    std::optional<std::size_t> trySquashFS(std::istream& stream, std::size_t offset)
     {
-        std::array<std::size_t, N> offsets;
-        std::size_t totalSize = 0;
-    };
-
-    template<typename T>
-    consteval auto getSrcOffsets()
-    {
-        constexpr int numFields = reflect::size<T>();
-        SrcInfo<numFields> info;
-
-        int opIdx = 0;
-
-        reflect::for_each([&](const auto& member){
-            info.offsets[opIdx] = info.totalSize;
-            info.totalSize += member.size_of;
-            ++opIdx;
-        }, T{});
-
-        return info;
-    }
-
-    template<class T>
-    requires (std::is_trivially_copyable_v<T>)
-    T* start_lifetime_as(void* p) noexcept
-    {
-        return std::launder(static_cast<T*>(std::memmove(p, p, sizeof(T))));
-    }
-
-    template<typename T>
-    std::optional<T> deserialize(int fd, std::size_t offset)
-    {
-        constexpr auto srcInfo = getSrcOffsets<T>();
-
-        std::vector<std::byte> bytes(srcInfo.totalSize);
-        int ret = pread(fd, bytes.data(), srcInfo.totalSize, offset);
-        if(ret != srcInfo.totalSize)
+        stream.seekg(offset);
+        if(!stream)
             return {};
 
-        return [&]<auto ... Ns>(std::index_sequence<Ns...>) {
-            return T{
-                *start_lifetime_as<std::remove_cvref_t<decltype(reflect::get<Ns>(T{}))>>(bytes.data() + srcInfo.offsets[Ns])...
-            };
-        }(std::make_index_sequence<reflect::size<T>()>());
-    }
-
-    template<typename T>
-    std::optional<std::vector<T>> deserializeArray(int fd, std::size_t offset, std::size_t numObjects)
-    {
-        constexpr auto srcInfo = getSrcOffsets<T>();
-
-        std::vector<T> ret;
-        ret.reserve(numObjects);
-
-        for(std::size_t i = 0; i < numObjects; ++i)
-        {
-            if(auto obj = deserialize<T>(fd, offset))
-            {
-                ret.push_back(std::move(*obj));
-                offset += srcInfo.totalSize;
-            }
-            else
-                return {};
-        }
-
-        return ret;
-    }
-}
-
-namespace
-{
-    std::optional<std::size_t> trySquashFS(int fd, std::size_t offset)
-    {
         char magic[4];
-        int ret = pread(fd, magic, sizeof(magic), offset);
-        if(ret != 4)
+        stream.read(magic, sizeof(magic));
+        if(!stream)
             return {};
 
         if(std::string_view{magic, sizeof(magic)} != "hsqs"sv)
@@ -163,9 +95,13 @@ namespace
         std::array<std::byte, 384> extra;
     };
 
-    std::optional<std::size_t> trySIF(int fd, std::size_t offset)
+    std::optional<std::size_t> trySIF(std::istream& stream, std::size_t offset)
     {
-        auto header = deserialize<SIFHeader>(fd, offset);
+        stream.seekg(offset);
+        if(!stream)
+            return {};
+
+        auto header = serialization::deserialize<SIFHeader>(stream);
         if(!header)
             return {};
 
@@ -178,22 +114,23 @@ namespace
             return {};
         }
 
-        auto descriptors = deserializeArray<SIFDescriptor>(fd, offset + header->descriptorsOffset, header->descriptorsTotal);
-        if(!descriptors)
+        stream.seekg(offset + header->descriptorsOffset);
+        for(std::int64_t i = 0; i < header->descriptorsTotal; ++i)
         {
-            error("Could not read descriptors");
-            return {};
-        }
+            auto descriptor = serialization::deserialize<SIFDescriptor>(stream);
+            if(!descriptor)
+            {
+                error("Could not read SIF descriptor");
+                return {};
+            }
 
-        for(auto& descriptor : *descriptors)
-        {
-            if(!descriptor.used)
+            if(!descriptor->used)
                 continue;
 
-            if(descriptor.type == SIFDataType::Partition)
+            if(descriptor->type == SIFDataType::Partition)
             {
-                std::size_t totalOffset = offset + descriptor.offset;
-                if(auto off = trySquashFS(fd, totalOffset))
+                std::size_t totalOffset = offset + descriptor->offset;
+                if(auto off = trySquashFS(stream, totalOffset))
                     return off;
             }
         }
@@ -204,14 +141,14 @@ namespace
     }
 }
 
-std::optional<std::size_t> findSquashFS(int fd, std::size_t offset)
+std::optional<std::size_t> findSquashFS(std::istream& stream, std::size_t globalOffset)
 {
     // Try 1: Is this a squashfs image already?
-    if(auto ret = trySquashFS(fd, offset))
+    if(auto ret = trySquashFS(stream, globalOffset))
         return ret;
 
     // Try 2: SIF image
-    if(auto ret = trySIF(fd, offset))
+    if(auto ret = trySIF(stream, globalOffset))
         return ret;
 
     return {};
