@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <span>
+#include <spanstream>
 
 #include <sched.h>
 #include <stdio.h>
@@ -37,6 +38,7 @@
 #include "nvidia.h"
 #include "image.h"
 #include "argparser.h"
+#include "serialization.h"
 
 namespace fs = std::filesystem;
 
@@ -191,12 +193,36 @@ static bool start_overlayfs()
     return false;
 }
 
+template <std::size_t N, std::size_t ... Is>
+consteval std::array<char, N - 1>
+to_array(const char (&a)[N], std::index_sequence<Is...>)
+{
+    return {{a[Is]...}};
+}
+
+template <std::size_t N>
+consteval std::array<char, N - 1> to_array(const char (&a)[N])
+{
+    return to_array(a, std::make_index_sequence<N - 1>());
+}
+
+struct InstallSegment
+{
+    static constexpr auto MAGIC = to_array("INSTALL_SEGMENT");
+
+    decltype(MAGIC) magic = MAGIC;
+    std::size_t segmentSize = 0;
+
+    std::vector<std::string> args;
+};
+
 struct Args
 {
     argparser::Option<bool, {.shortName='h'}> help = false;
 
     std::optional<std::string> image;
     std::vector<std::string> bind;
+    std::optional<std::string> install;
 
     std::vector<std::string> remaining;
 };
@@ -207,10 +233,12 @@ void usage()
 Usage: tiny-runtime [options] [cmd to execute in container...]
 
 Options:
-  --help                   This help screen
-  --image IMAGE            Use image IMAGE
-  --bind PATH              Make PATH from outside available as PATH in container
-  --bind OUTSIDE:INSIDE    Make OUTSIDE available as INSIDE in container
+  --help                   This help screen.
+  --image IMAGE            Use image IMAGE.
+  --bind PATH              Make PATH from outside available as PATH in container.
+  --bind OUTSIDE:INSIDE    Make OUTSIDE available as INSIDE in container.
+  --install IMAGE          Install this tiny_runtime inside IMAGE.
+                           The image is renamed to extension ".trt".
 
 )EOS");
 }
@@ -251,6 +279,58 @@ int main(int argc, char** argv)
             fatal("Either need --image or an image file concatenated to tiny_runtime");
 
         image = {self, segments.image.offset};
+    }
+
+    if(args.install)
+    {
+        if(args.image)
+            fatal("You supplied --install and --image, which does not make any sense.");
+
+        InstallSegment installSegment;
+
+        // Serialize args (without --install)
+        args.install = {};
+        installSegment.args = argparser::serialize(args);
+
+        const std::size_t serializedSize = serialization::serializedSize(installSegment);
+
+        // Pad such that our binary + install segment ends at 4KB boundary
+        const std::size_t binarySize = segments.fuseOverlay.offset + segments.fuseOverlay.size;
+        const std::size_t combinedSize = binarySize + serializedSize;
+        const std::size_t paddedSize = ((combinedSize + 4096 - 1) / 4096) * 4096;
+        const std::size_t paddedInstallSize = paddedSize - binarySize;
+
+        std::vector<char> serializedInstall(paddedInstallSize, 0);
+
+        {
+            std::ospanstream out(serializedInstall);
+            if(!serialization::serializeInto(installSegment, out))
+                fatal("Could not serialize install segment");
+        }
+
+        if(!os::prepend_space_to_file(*args.install, paddedSize))
+            fatal("Could not prepend space to file");
+
+        // Write everything to front of file
+        {
+            int fd = open(args.install->c_str(), O_WRONLY);
+            if(fd < 0)
+                sys_fatal("Could not open {}", *args.install);
+            auto fdGuard = sg::make_scope_guard([&]{ close(fd); });
+
+            int srcFD = open(self.c_str(), O_RDONLY);
+            if(srcFD < 0)
+                sys_fatal("Could not open {}", self);
+            auto srcGuard = sg::make_scope_guard([&]{ close(srcFD); });
+
+            if(!os::copy_from_to_fd(srcFD, fd, binarySize))
+                fatal("Could not copy our binary to {}", *args.install);
+
+            if(!os::write_to_fd(fd, serializedInstall))
+                fatal("Could not write install segment to {}", *args.install);
+        }
+
+        return 0;
     }
 
     int euid = geteuid();

@@ -269,6 +269,12 @@ std::vector<std::string> serialize(const ArgClass& args)
         (... , detail::serializeMember<ArgClass, Ns>(data, args));
     }(std::make_index_sequence<reflect::size<ArgClass>()>());
 
+    if constexpr(requires { args.remaining; })
+    {
+        data.reserve(data.size() + args.remaining.size());
+        std::ranges::copy(args.remaining, std::back_inserter(data));
+    }
+
     return data;
 }
 
