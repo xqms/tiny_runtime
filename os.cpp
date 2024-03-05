@@ -159,4 +159,205 @@ std::optional<std::filesystem::path> find_binary(const std::string_view& name)
     return {};
 }
 
+bool prepend_space_to_file(const std::filesystem::path& path, std::size_t amount)
+{
+    // Try fallocate() first
+    {
+        int fd = open(path.c_str(), O_RDWR);
+        if(fd < 0)
+        {
+            sys_error("Could not open '{}'", path);
+            return false;
+        }
+        auto guard = sg::make_scope_guard([&]{ close(fd); });
+
+        int ret = fallocate(fd, FALLOC_FL_INSERT_RANGE, 0, amount);
+        if(ret == 0)
+            return true;
+
+        sys_error("Could not use fallocate() to prepend space to {}", path);
+        error("Falling back to slow copy mode");
+    }
+
+    fs::path tempFile = path;
+    tempFile += ".trt-temp";
+
+    std::error_code ec;
+    fs::rename(path, tempFile, ec);
+    if(ec)
+    {
+        error("Could not rename {} to {}: {}", path, tempFile, ec);
+        return false;
+    }
+
+    auto unlinkGuard = sg::make_scope_guard([&]{
+        if(unlink(tempFile.c_str()) != 0)
+            sys_error("Could not remove temporary file {}", tempFile);
+    });
+
+    int srcFD = open(tempFile.c_str(), O_RDONLY);
+    if(srcFD < 0)
+    {
+        sys_error("Could not open {}", tempFile);
+        return false;
+    }
+
+    struct stat statbuf{};
+    if(fstat(srcFD, &statbuf) != 0)
+    {
+        sys_error("Could not stat() {}", tempFile);
+        return false;
+    }
+
+    auto srcGuard = sg::make_scope_guard([&]{ close(srcFD); });
+
+    int dstFD = open(path.c_str(), O_WRONLY|O_TRUNC|O_CREAT, statbuf.st_mode);
+    if(dstFD < 0)
+    {
+        sys_error("Could not create {}", path);
+        return false;
+    }
+
+    std::vector<char> data(amount, 0);
+    if(write(dstFD, data.data(), data.size()) != static_cast<ssize_t>(data.size()))
+    {
+        sys_error("Could not write zeroes to {}", path);
+        return false;
+    }
+
+    return copy_from_to_fd(srcFD, dstFD);
+}
+
+bool remove_leading_space(const std::filesystem::path& path, std::size_t amount)
+{
+    // Try fallocate() first
+    {
+        int fd = open(path.c_str(), O_RDWR);
+        if(fd < 0)
+        {
+            sys_error("Could not open '{}'", path);
+            return false;
+        }
+        auto guard = sg::make_scope_guard([&]{ close(fd); });
+
+        int ret = fallocate(fd, FALLOC_FL_COLLAPSE_RANGE, 0, amount);
+        if(ret == 0)
+            return true;
+
+        sys_error("Could not use fallocate() to remove leading data from {}", path);
+        error("Falling back to slow copy mode");
+    }
+
+    fs::path tempFile = path;
+    tempFile += ".trt-temp";
+
+    std::error_code ec;
+    fs::rename(path, tempFile, ec);
+    if(ec)
+    {
+        error("Could not rename {} to {}: {}", path, tempFile, ec);
+        return false;
+    }
+
+    int srcFD = open(tempFile.c_str(), O_RDONLY);
+    if(srcFD < 0)
+    {
+        sys_error("Could not open {}", tempFile);
+        return false;
+    }
+
+    if(lseek64(srcFD, amount, SEEK_SET) != static_cast<off64_t>(amount))
+    {
+        sys_error("Could not seek in {}", tempFile);
+        return false;
+    }
+
+    struct stat statbuf{};
+    if(fstat(srcFD, &statbuf) != 0)
+    {
+        sys_error("Could not stat() {}", tempFile);
+        return false;
+    }
+
+    auto srcGuard = sg::make_scope_guard([&]{ close(srcFD); });
+
+    int dstFD = open(path.c_str(), O_WRONLY|O_TRUNC|O_CREAT, statbuf.st_mode);
+    if(dstFD < 0)
+    {
+        sys_error("Could not create {}", path);
+        return false;
+    }
+
+    auto unlinkGuard = sg::make_scope_guard([&]{
+        if(unlink(tempFile.c_str()) != 0)
+            sys_error("Could not remove temporary file {}", tempFile);
+    });
+
+    return copy_from_to_fd(srcFD, dstFD);
+}
+
+bool copy_from_to_fd(int srcFD, int dstFD, const std::optional<std::size_t>& maxSize)
+{
+    std::vector<char> buf(4096 * 1024);
+
+    std::size_t toRead = 0;
+    if(maxSize)
+        toRead = *maxSize;
+
+    while(true)
+    {
+        std::size_t readSize = maxSize ? std::min(buf.size(), *maxSize) : buf.size();
+        auto bytes = read(srcFD, buf.data(), readSize);
+        if(bytes < 0)
+        {
+            sys_error("Could not read()");
+            return false;
+        }
+        if(bytes == 0)
+            break;
+
+        while(bytes != 0)
+        {
+            auto wbytes = write(dstFD, buf.data(), bytes);
+            if(wbytes <= 0)
+            {
+                sys_error("Could not write()");
+                return false;
+            }
+
+            bytes -= wbytes;
+        }
+
+        if(maxSize)
+        {
+            toRead -= bytes;
+            if(toRead == 0)
+                break;
+        }
+    }
+
+    return true;
+}
+
+bool write_to_fd(int fd, const std::span<char>& data)
+{
+    std::size_t toWrite = data.size();
+    const char* ptr = data.data();
+
+    while(toWrite != 0)
+    {
+        auto ret = write(fd, ptr, toWrite);
+        if(ret <= 0)
+        {
+            sys_error("Could not write()");
+            return false;
+        }
+
+        ptr += ret;
+        toWrite -= ret;
+    }
+
+    return true;
+}
+
 }

@@ -9,4 +9,6 @@
 
 std::optional<std::size_t> getELFSize(const char* file, std::size_t offset);
 
+bool isELF(const char* file);
+
 #endif

@@ -10,6 +10,7 @@
 #include <cstring>
 #include <filesystem>
 #include <optional>
+#include <span>
 
 #include <unistd.h>
 #include <sys/mount.h>
@@ -73,6 +74,18 @@ bool bind_mount(const std::filesystem::path& outside, const std::optional<std::f
 
 [[nodiscard]]
 std::optional<std::filesystem::path> find_binary(const std::string_view& name);
+
+[[nodiscard]]
+bool prepend_space_to_file(const std::filesystem::path& path, std::size_t amount);
+
+[[nodiscard]]
+bool remove_leading_space(const std::filesystem::path& path, std::size_t amount);
+
+[[nodiscard]]
+bool copy_from_to_fd(int srcFD, int dstFD, const std::optional<std::size_t>& maxSize = {});
+
+[[nodiscard]]
+bool write_to_fd(int fd, const std::span<char>& data);
 
 }
 

@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <span>
+#include <spanstream>
 
 #include <sched.h>
 #include <stdio.h>
@@ -37,6 +38,7 @@
 #include "nvidia.h"
 #include "image.h"
 #include "argparser.h"
+#include "serialization.h"
 
 namespace fs = std::filesystem;
 
@@ -45,15 +47,41 @@ static int pivot_root(const char *new_root, const char *put_old)
     return syscall(SYS_pivot_root, new_root, put_old);
 }
 
+template <std::size_t N, std::size_t ... Is>
+consteval std::array<char, N - 1>
+to_array(const char (&a)[N], std::index_sequence<Is...>)
+{
+    return {{a[Is]...}};
+}
+
+template <std::size_t N>
+consteval std::array<char, N - 1> to_array(const char (&a)[N])
+{
+    return to_array(a, std::make_index_sequence<N - 1>());
+}
+
+struct InstallSegment
+{
+    static constexpr auto MAGIC = to_array("INSTALL_SEGMENT");
+
+    std::array<char, MAGIC.size()> magic = MAGIC;
+    std::size_t segmentSize = 0;
+
+    std::vector<std::string> args;
+};
+
 struct Segment
 {
-    std::size_t offset;
-    std::size_t size;
+    std::size_t offset = 0;
+    std::size_t size = 0;
 };
 struct Segments
 {
     Segment squashFuse;
     Segment fuseOverlay;
+
+    std::optional<InstallSegment> install;
+
     Segment image;
 };
 
@@ -61,23 +89,44 @@ static Segments findSegments(const char* file)
 {
     Segments segments;
 
-    if(auto mySize = getELFSize(file, 0))
+    std::size_t offset = 0;
+
+    if(auto mySize = getELFSize(file, offset))
+    {
         segments.squashFuse.offset = *mySize;
+        offset += *mySize;
+    }
     else
         fatal("Could not get own ELF size");
 
-    if(auto size = getELFSize(file, segments.squashFuse.offset))
+    if(auto size = getELFSize(file, offset))
+    {
         segments.squashFuse.size = *size;
+        offset += *size;
+    }
     else
         fatal("Could not get squashfuse ELF size");
 
-    segments.fuseOverlay.offset = segments.squashFuse.offset + segments.squashFuse.size;
-    if(auto size = getELFSize(file, segments.fuseOverlay.offset))
+    segments.fuseOverlay.offset = offset;
+    if(auto size = getELFSize(file, offset))
+    {
         segments.fuseOverlay.size = *size;
+        offset += *size;
+    }
     else
         fatal("Could not get fuse-overlayfs ELF size");
 
-    segments.image.offset = segments.fuseOverlay.offset + segments.fuseOverlay.size;
+    // Install segment present?
+    {
+        std::ifstream input(file);
+        input.seekg(offset);
+
+        segments.install = serialization::deserialize<InstallSegment>(input);
+        if(segments.install)
+            offset += segments.install->segmentSize;
+    }
+
+    segments.image.offset = offset;
     segments.image.size = os::file_size(file) - segments.image.offset;
 
     return segments;
@@ -121,7 +170,6 @@ static void writeTool(const char* file, const Segment& segment, const char* dest
 static bool start_squashfuse(const char* file, std::size_t offset)
 {
     // Run squashfuse
-    info("Mounting image...");
     auto pid = os::fork_and_execv_with_caps(
         config::SQUASHFUSE,
         "-f",
@@ -157,8 +205,6 @@ static bool start_squashfuse(const char* file, std::size_t offset)
 [[nodiscard]]
 static bool start_overlayfs()
 {
-    info("Mounting overlay...");
-
     setenv("FUSE_OVERLAYFS_DISABLE_OVL_WHITEOUT", "y", 1);
     auto pid = os::fork_and_execv_with_caps(
         config::FUSE_OVERLAYFS,
@@ -197,8 +243,10 @@ struct Args
 
     std::optional<std::string> image;
     std::vector<std::string> bind;
+    std::optional<std::string> install;
+    bool verbose = false;
 
-    std::vector<std::string> remaining;
+    argparser::PositionalArguments remaining;
 };
 
 void usage()
@@ -207,18 +255,40 @@ void usage()
 Usage: tiny-runtime [options] [cmd to execute in container...]
 
 Options:
-  --help                   This help screen
-  --image IMAGE            Use image IMAGE
-  --bind PATH              Make PATH from outside available as PATH in container
-  --bind OUTSIDE:INSIDE    Make OUTSIDE available as INSIDE in container
+  --help                   This help screen.
+  --image IMAGE            Use image IMAGE.
+  --bind PATH              Make PATH from outside available as PATH in container.
+  --bind OUTSIDE:INSIDE    Make OUTSIDE available as INSIDE in container.
+  --install IMAGE          Install this tiny_runtime inside IMAGE.
+                           The image is renamed to extension ".trt".
+  --verbose                Enable verbose messages.
 
 )EOS");
 }
 
 int main(int argc, char** argv)
 {
+    // Find our executable
+    auto self = fs::read_symlink("/proc/self/exe");
+
+    Segments segments = findSegments(self.c_str());
+
     Args args;
-    argparser::parse(args, std::span<char*>(argv+1, argc-1));
+    try
+    {
+        argparser::Parser parser{args};
+
+        if(segments.install)
+            parser.parse(segments.install->args);
+
+        parser.parse(std::span<char*>(argv+1, argc-1));
+    }
+    catch(argparser::ArgumentException& e)
+    {
+        error("Could not parse arguments: {}", e.what());
+        error("See --help for help.");
+        return 1;
+    }
 
     if(args.help)
     {
@@ -226,22 +296,89 @@ int main(int argc, char** argv)
         return 0;
     }
 
-    // Find our executable
-    auto self = []{
-        char buf[1024];
-        auto ret = readlink("/proc/self/exe", buf, sizeof(buf));
-        if(ret < 0 || ret == sizeof(buf))
-            sys_fatal("Could not read link /proc/self/exe");
-        return std::string{buf};
-    }();
-
-    Segments segments = findSegments(self.c_str());
+    // Logging
+    log_debug = args.verbose;
 
     struct
     {
         std::string file;
         std::size_t offset;
     } image;
+
+    if(args.install)
+    {
+        if(args.image)
+            fatal("You supplied --install and --image, which does not make any sense.");
+
+        fs::path dest = *args.install;
+        info("Installing into {}", dest);
+
+        if(isELF(dest.c_str()))
+        {
+            info("{} is already an ELF executable. Checking if it is a tiny_runtime...", dest);
+            Segments prevSegments = findSegments(dest.c_str());
+
+            if(!prevSegments.install)
+                fatal("{} is something else.", dest);
+
+            info("it is.");
+
+            if(!os::remove_leading_space(dest, prevSegments.image.offset))
+                fatal("Could not remove tiny_runtime from image {}", dest);
+        }
+
+        InstallSegment installSegment;
+
+        // Serialize args (without --install)
+        args.install = {};
+        installSegment.args = argparser::serialize(args);
+
+        const std::size_t serializedSize = serialization::serializedSize(installSegment);
+
+        // Pad such that our binary + install segment ends at 4KB boundary
+        const std::size_t binarySize = segments.fuseOverlay.offset + segments.fuseOverlay.size;
+        const std::size_t combinedSize = binarySize + serializedSize;
+        const std::size_t paddedSize = ((combinedSize + 4096 - 1) / 4096) * 4096;
+        const std::size_t paddedInstallSize = paddedSize - binarySize;
+
+        installSegment.segmentSize = paddedInstallSize;
+        std::vector<char> serializedInstall(paddedInstallSize, 0);
+
+        {
+            std::ospanstream out(serializedInstall);
+            if(!serialization::serializeInto(installSegment, out))
+                fatal("Could not serialize install segment");
+        }
+
+        if(!os::prepend_space_to_file(dest, paddedSize))
+            fatal("Could not prepend space to file");
+
+        // Write everything to front of file
+        {
+            int fd = open(dest.c_str(), O_WRONLY);
+            if(fd < 0)
+                sys_fatal("Could not open {}", dest);
+            auto fdGuard = sg::make_scope_guard([&]{ close(fd); });
+
+            int srcFD = open(self.c_str(), O_RDONLY);
+            if(srcFD < 0)
+                sys_fatal("Could not open {}", self);
+            auto srcGuard = sg::make_scope_guard([&]{ close(srcFD); });
+
+            if(!os::copy_from_to_fd(srcFD, fd, binarySize))
+                fatal("Could not copy our binary to {}", dest);
+
+            if(!os::write_to_fd(fd, serializedInstall))
+                fatal("Could not write install segment to {}", dest);
+        }
+
+        // Make executable
+        fs::permissions(dest, fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec, fs::perm_options::add);
+
+        info("tiny_runtime installed into image.");
+
+        return 0;
+    }
 
     if(args.image)
         image = {*args.image, 0};
@@ -321,13 +458,11 @@ int main(int argc, char** argv)
     // Find squashfs image
     std::size_t squashFSOffset = 0;
     {
-        int fd = open(image.file.c_str(), O_RDONLY);
-        if(fd < 0)
+        std::ifstream file{image.file};
+        if(!file)
             sys_fatal("Could not open image file {}", image.file);
 
-        auto guard = sg::make_scope_guard([&]{ close(fd); });
-
-        if(auto off = image::findSquashFS(fd, image.offset))
+        if(auto off = image::findSquashFS(file, image.offset))
             squashFSOffset = *off;
         else
             fatal("Could not find squashFS image inside container file");
@@ -404,7 +539,7 @@ int main(int argc, char** argv)
     }
 
     // Mount nvidia tools & libraries
-    info("NVIDIA setup...");
+    debug("NVIDIA setup...");
     nvidia::configure();
 
     fs::path cwd = fs::current_path();
@@ -435,7 +570,7 @@ int main(int argc, char** argv)
         error("Could not cd to current directory ({}): {}", std::string{cwd}, e.what());
     }
 
-    info("Starting user command");
+    debug("Starting user command: {}", args.remaining);
 
     if(fs::exists("/.singularity.d/runscript"))
     {
