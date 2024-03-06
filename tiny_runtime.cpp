@@ -570,20 +570,19 @@ int main(int argc, char** argv)
         error("Could not cd to current directory ({}): {}", std::string{cwd}, e.what());
     }
 
-    debug("Starting user command: {}", args.remaining);
-
-    if(fs::exists("/.singularity.d/runscript"))
+    if(fs::exists("/.singularity.d/actions/run"))
     {
         std::vector<char*> runArgs;
-        runArgs.push_back(strdup("runscript"));
+        runArgs.push_back(strdup("run"));
 
         for(auto& arg : args.remaining)
             runArgs.push_back(strdup(arg.c_str()));
 
         runArgs.push_back(nullptr);
 
-        if(execv("/.singularity.d/runscript", runArgs.data()) != 0)
-            sys_fatal("Could not execute /.singularity.d/runscript");
+        debug("Starting user command: /.singularity.d/actions/run {}", args.remaining);
+        if(execv("/.singularity.d/actions/run", runArgs.data()) != 0)
+            sys_fatal("Could not execute /.singularity.d/actions/run");
     }
     else if(fs::exists("/etc/rc"))
     {
@@ -595,6 +594,7 @@ int main(int argc, char** argv)
 
         runArgs.push_back(nullptr);
 
+        debug("Starting user command: /etc/rc {}", args.remaining);
         if(execv("/etc/rc", runArgs.data()) != 0)
             sys_fatal("Could not execute /etc/rc");
     }
