@@ -9,12 +9,8 @@ jobs:
     steps:
       - name: Check out repository code
         uses: actions/checkout@v4
-      - name: Configure and Build Project
-        uses: threeal/cmake-action@v1.3.0
-        with:
-          args:
-            - "CMAKE_BUILD_TYPE=RelWithDebInfo"
-          run-build: true
+      - name: Build
+        run: cmake '.' -B 'build' -DCMAKE_BUILD_TYPE=RelWithDebInfo
       - uses: actions/upload-artifact@v4
         with:
           name: tiny_runtime
