@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <span>
 #include <spanstream>
+#include <iostream>
 
 #include <sched.h>
 #include <stdio.h>
@@ -28,6 +29,8 @@
 #include <fmt/compile.h>
 #include <fmt/ranges.h>
 #include <fmt/std.h>
+
+#include <nlohmann/json.hpp>
 
 #include "config.h"
 #include "log.h"
@@ -256,6 +259,7 @@ struct Args
     bool verbose = false;
     std::optional<std::string> docker;
     std::optional<std::string> docker_out = "docker.trt";
+    std::vector<std::string> env;
 
     argparser::PositionalArguments remaining;
 };
@@ -276,6 +280,7 @@ Options:
   --docker IMAGE:TAG       Obtain image from local Docker daemon. The image
                            is saved as docker.trt.
   --docker-out PATH        Save Docker image as PATH instead.
+  --env NAME=VALUE         Set NAME=VALUE in environment
 
 )EOS");
 }
@@ -355,10 +360,34 @@ bool install(const fs::path& self, const Segments& segments, Args& args, const f
 
 bool docker(const fs::path& self, const Segments& segments, Args& args)
 {
+    using json = nlohmann::json;
+
     fs::path out = fs::absolute(*args.docker_out);
 
     if(fs::exists(out))
         fatal("Output file '{}' already exists. Please remove it first.", out);
+
+    // Obtain JSON
+    auto jsonString = os::run_get_output("docker", "image", "inspect", args.docker->c_str());
+    if(!jsonString)
+        fatal("Could not query image information from docker daemon");
+
+    json spec = json::parse(*jsonString);
+    auto containerConfig = spec.at(0).at("Config");
+
+    if(containerConfig.contains("Entrypoint"))
+    {
+        args.remaining.clear();
+
+        for(auto& arg : containerConfig.at("Entrypoint"))
+            args.remaining.push_back(arg.get<std::string>());
+    }
+
+    if(containerConfig.contains("Env"))
+    {
+        for(auto& env : containerConfig.at("Env"))
+            args.env.push_back(env);
+    }
 
     char tempDir[] = {"/tmp/tiny_runtime-XXXXXX"};
     if(!mkdtemp(tempDir))
@@ -373,6 +402,7 @@ bool docker(const fs::path& self, const Segments& segments, Args& args)
         "docker", "run",
         "-v", fmt::format("{}:/mksquashfs", mksquashfs).c_str(),
         "-v", fmt::format("{}:/mksquashfs_out", out.parent_path()).c_str(),
+        "--entrypoint", "",
         "-it", args.docker->c_str(),
 
         "/mksquashfs",
@@ -436,6 +466,8 @@ int main(int argc, char** argv)
 
     // Logging
     log_debug = args.verbose;
+
+    debug("arguments: {}", argparser::serialize(args));
 
     if(args.docker)
     {
@@ -616,6 +648,22 @@ int main(int argc, char** argv)
         setenv("debian_chroot", "container", 1);
     }
 
+    // User/OCI-specified environment variables
+    for(auto& env : args.env)
+    {
+        auto eq = env.find('=');
+        if(eq == env.npos)
+        {
+            error("Ignoring invalid env spec '{}'", env);
+            continue;
+        }
+
+        auto name = env.substr(0, eq);
+        auto value = env.substr(eq+1);
+        debug("Setting {}={}", name, value);
+        setenv(name.c_str(), value.c_str(), 1);
+    }
+
     // Custom mounts
     for(auto& path : args.bind)
     {
@@ -694,9 +742,23 @@ int main(int argc, char** argv)
     }
     else
     {
-        auto args = std::to_array({strdup("/bin/bash"), static_cast<char*>(nullptr)});
-        if(execv("/bin/bash", args.data()) != 0)
-            sys_fatal("Could not execute /bin/bash");
+        std::vector<char*> runArgs;
+        std::string cmd = "/bin/bash";
+
+        if(args.remaining.empty())
+            runArgs.push_back(strdup(cmd.c_str()));
+        else
+        {
+            cmd = args.remaining[0];
+
+            for(auto& arg : args.remaining)
+                runArgs.push_back(strdup(arg.c_str()));
+        }
+        runArgs.push_back(nullptr);
+
+        debug("Running {}", runArgs | std::views::take(runArgs.size()-1));
+        if(execv(cmd.c_str(), runArgs.data()) != 0)
+            sys_fatal("Could not execute {}", runArgs | std::views::take(runArgs.size()-1));
     }
 
     return 0;

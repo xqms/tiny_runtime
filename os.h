@@ -11,11 +11,15 @@
 #include <filesystem>
 #include <optional>
 #include <span>
+#include <ranges>
 
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/mount.h>
+#include <sys/wait.h>
 
 #include "log.h"
+#include "scope_guard.h"
 
 namespace os
 {
@@ -43,6 +47,8 @@ pid_t fork_and_execv_with_caps(const char* cmd, Args ... args)
             strdup(args)...,
             static_cast<char*>(nullptr)
         });
+
+        debug("Running {}", argsCopy | std::views::take(argsCopy.size()-1));
 
         if(execvp(cmd, argsCopy.data()) != 0)
             sys_fatal("Could not run {}", cmd);
@@ -82,7 +88,7 @@ pid_t fork_and_execv(const char* cmd, Args ... args)
             static_cast<char*>(nullptr)
         });
 
-        debug("Running {}", argsCopy);
+        debug("Running {}", argsCopy | std::views::take(argsCopy.size()-1));
 
         if(execvp(cmd, argsCopy.data()) != 0)
             sys_fatal("Could not run {}", cmd);
@@ -107,6 +113,71 @@ bool run(const char* cmd, Args&& ... args)
         fatal("{} failed", cmd);
 
     return true;
+}
+
+template<std::convertible_to<const char*> ... Args>
+[[nodiscard]]
+std::optional<std::string> run_get_output(const char* cmd, Args&& ... args)
+{
+    int pipefd[2];
+    if(pipe2(pipefd, O_CLOEXEC) != 0)
+    {
+        sys_error("Could not create pipe");
+        return {};
+    }
+
+    auto pid = fork();
+    if(pid == 0)
+    {
+        close(pipefd[0]);
+        if(dup2(pipefd[1], STDOUT_FILENO) == -1)
+            sys_fatal("dup2");
+
+        auto argsCopy = std::to_array<char*>({
+            strdup(cmd),
+            strdup(args)...,
+            static_cast<char*>(nullptr)
+        });
+
+        debug("Running {}", argsCopy | std::views::take(argsCopy.size()-1));
+
+        if(execvp(cmd, argsCopy.data()) != 0)
+            sys_fatal("Could not run {}", cmd);
+    }
+
+    close(pipefd[1]);
+    auto guard = sg::make_scope_guard([&]{ close(pipefd[0]); });
+
+    std::stringstream ss;
+    char buf[1024];
+    while(true)
+    {
+        auto ret = read(pipefd[0], buf, sizeof(buf));
+        if(ret < 0)
+        {
+            sys_error("Could not read()");
+            return {};
+        }
+        if(ret == 0)
+            break;
+
+        ss.write(buf, ret);
+    }
+
+    int wstatus = 0;
+    if(waitpid(pid, &wstatus, 0) <= 0)
+    {
+        sys_error("Could not wait for cmd {}", cmd);
+        return {};
+    }
+
+    if(!WIFEXITED(wstatus) || WEXITSTATUS(wstatus) != 0)
+    {
+        error("{} failed", cmd);
+        return {};
+    }
+
+    return ss.str();
 }
 
 [[nodiscard]]

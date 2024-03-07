@@ -37,6 +37,7 @@ include(cmake/CPM.cmake)
 
 CPMAddPackage("gh:fmtlib/fmt#10.2.1")
 CPMAddPackage("gh:boost-ext/reflect@1.0.8")
+CPMAddPackage("gh:nlohmann/json@3.11.3")
 
 add_library(reflect INTERFACE)
 target_include_directories(reflect SYSTEM INTERFACE ${reflect_SOURCE_DIR})
@@ -57,6 +58,7 @@ add_executable(tiny_runtime_starter
 target_link_libraries(tiny_runtime_starter
     fmt::fmt
     reflect::reflect
+    nlohmann_json::nlohmann_json
     cap
 )
 target_link_options(tiny_runtime_starter PRIVATE
