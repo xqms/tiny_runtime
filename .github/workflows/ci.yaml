@@ -12,4 +12,10 @@ jobs:
       - name: Configure and Build Project
         uses: threeal/cmake-action@v1.3.0
         with:
+          args:
+            - "CMAKE_BUILD_TYPE=RelWithDebInfo"
           run-build: true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tiny_runtime
+          path: build/tiny_runtime
