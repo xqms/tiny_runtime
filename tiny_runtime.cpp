@@ -438,7 +438,7 @@ int main(int argc, char** argv)
         sys_fatal("Could not change to MS_PRIVATE");
 
     // Mount tmpfs in session dir
-    if(mount("tmpfs", config::SESSION, "tmpfs", 0, "size=100M") != 0)
+    if(mount("tmpfs", config::SESSION, "tmpfs", 0, "") != 0)
         sys_fatal("Could not mount tmpfs");
 
     // and make it unbindable so it's not available in the container later
