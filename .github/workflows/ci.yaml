@@ -9,8 +9,10 @@ jobs:
     steps:
       - name: Check out repository code
         uses: actions/checkout@v4
-      - name: Build
+      - name: Configure
         run: cmake '.' -B 'build' -DCMAKE_BUILD_TYPE=RelWithDebInfo
+      - name: Build
+        run: cmake --build build
       - uses: actions/upload-artifact@v4
         with:
           name: tiny_runtime
