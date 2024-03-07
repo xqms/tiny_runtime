@@ -605,6 +605,17 @@ int main(int argc, char** argv)
             fatal("Could not mount your home directory '{}'", home);
     }
 
+    // Some helpful environment variables
+    {
+        // Since we auto-mount $HOME, a python instance in the container might look
+        // for packages in ~/.local/lib/pythonXY, which is probably not what the user
+        // expects.
+        setenv("PYTHONNOUSERSITE", "1", 1);
+
+        // Set debian_chroot, which shows up in PS1 on Debian-based systems.
+        setenv("debian_chroot", "container", 1);
+    }
+
     // Custom mounts
     for(auto& path : args.bind)
     {
