@@ -1,0 +1,17 @@
+name: Build and Test
+on: [push]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: xqms/tiny_runtime_build:latest
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+      - run: |
+          cd ${{ github.workspace }}
+      - name: Configure and Build Project
+        uses: threeal/cmake-action@v1.3.0
+        with:
+          run-build: true
