@@ -22,6 +22,16 @@ ExternalProject_Add(fuse_overlayfs
     BUILD_COMMAND ""
     INSTALL_COMMAND ""
 )
+ExternalProject_Add(squashfs-tools
+    URL https://github.com/plougher/squashfs-tools/archive/refs/tags/4.6.1.tar.gz
+    URL_HASH SHA256=94201754b36121a9f022a190c75f718441df15402df32c2b520ca331a107511c
+    DOWNLOAD_EXTRACT_TIMESTAMP ON
+    BUILD_IN_SOURCE ON
+
+    CONFIGURE_COMMAND ""
+    BUILD_COMMAND make -C squashfs-tools EXTRA_LDFLAGS=-static ZSTD_SUPPORT=1 USE_PREBUILT_MANPAGES=y "INSTALL_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/tools"
+    INSTALL_COMMAND make -C squashfs-tools EXTRA_LDFLAGS=-static ZSTD_SUPPORT=1 USE_PREBUILT_MANPAGES=y "INSTALL_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/tools" install
+)
 
 include(cmake/CPM.cmake)
 
@@ -57,11 +67,12 @@ ExternalProject_Get_Property(fuse_overlayfs DOWNLOAD_DIR)
 set(FUSE_OVERLAYFS_OUT "${DOWNLOAD_DIR}/fuse-overlayfs-x86_64")
 add_custom_command(
     OUTPUT tiny_runtime
-    DEPENDS tiny_runtime_starter squashfuse
+    DEPENDS tiny_runtime_starter squashfuse fuse_overlayfs squashfs-tools
     COMMAND strip -o tiny_runtime.stripped tiny_runtime_starter
     COMMAND strip -o squashfuse.stripped tools/bin/squashfuse_ll
     COMMAND strip -o overlayfs.stripped "${FUSE_OVERLAYFS_OUT}"
-    COMMAND cat tiny_runtime.stripped squashfuse.stripped overlayfs.stripped > tiny_runtime
+    COMMAND strip -o mksquashfs.stripped tools/bin/mksquashfs
+    COMMAND cat tiny_runtime.stripped squashfuse.stripped overlayfs.stripped mksquashfs.stripped > tiny_runtime
     # COMMAND cat tiny_runtime_starter tools/bin/squashfuse_ll "${FUSE_OVERLAYFS_OUT}" > tiny_runtime
     COMMAND chmod a+x tiny_runtime
 )

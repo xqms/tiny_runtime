@@ -79,6 +79,7 @@ struct Segments
 {
     Segment squashFuse;
     Segment fuseOverlay;
+    Segment mksquashfs;
 
     std::optional<InstallSegment> install;
 
@@ -115,6 +116,14 @@ static Segments findSegments(const char* file)
     }
     else
         fatal("Could not get fuse-overlayfs ELF size");
+
+    // mksquashFS present?
+    segments.mksquashfs.offset = offset;
+    if(auto size = getELFSize(file, offset))
+    {
+        segments.mksquashfs.size = *size;
+        offset += *size;
+    }
 
     // Install segment present?
     {
@@ -245,6 +254,8 @@ struct Args
     std::vector<std::string> bind;
     std::optional<std::string> install;
     bool verbose = false;
+    std::optional<std::string> docker;
+    std::optional<std::string> docker_out = "docker.trt";
 
     argparser::PositionalArguments remaining;
 };
@@ -262,8 +273,135 @@ Options:
   --install IMAGE          Install this tiny_runtime inside IMAGE.
                            The image is renamed to extension ".trt".
   --verbose                Enable verbose messages.
+  --docker IMAGE:TAG       Obtain image from local Docker daemon. The image
+                           is saved as docker.trt.
+  --docker-out PATH        Save Docker image as PATH instead.
 
 )EOS");
+}
+
+bool install(const fs::path& self, const Segments& segments, Args& args, const fs::path& dest)
+{
+    info("Installing into {}", dest);
+
+    if(isELF(dest.c_str()))
+    {
+        info("{} is already an ELF executable. Checking if it is a tiny_runtime...", dest);
+        Segments prevSegments = findSegments(dest.c_str());
+
+        if(!prevSegments.install)
+            fatal("{} is something else.", dest);
+
+        info("it is.");
+
+        if(!os::remove_leading_space(dest, prevSegments.image.offset))
+            fatal("Could not remove tiny_runtime from image {}", dest);
+    }
+
+    InstallSegment installSegment;
+
+    // Serialize args (without --install or --docker)
+    args.install = {};
+    args.docker = {};
+    args.docker_out = {};
+    installSegment.args = argparser::serialize(args);
+
+    const std::size_t serializedSize = serialization::serializedSize(installSegment);
+
+    // Pad such that our binary + install segment ends at 4KB boundary
+    const std::size_t binarySize = segments.image.offset;
+    const std::size_t combinedSize = binarySize + serializedSize;
+    const std::size_t paddedSize = ((combinedSize + 4096 - 1) / 4096) * 4096;
+    const std::size_t paddedInstallSize = paddedSize - binarySize;
+
+    installSegment.segmentSize = paddedInstallSize;
+    std::vector<char> serializedInstall(paddedInstallSize, 0);
+
+    {
+        std::ospanstream out(serializedInstall);
+        if(!serialization::serializeInto(installSegment, out))
+            fatal("Could not serialize install segment");
+    }
+
+    if(!os::prepend_space_to_file(dest, paddedSize))
+        fatal("Could not prepend space to file");
+
+    // Write everything to front of file
+    {
+        int fd = open(dest.c_str(), O_WRONLY);
+        if(fd < 0)
+            sys_fatal("Could not open {}", dest);
+        auto fdGuard = sg::make_scope_guard([&]{ close(fd); });
+
+        int srcFD = open(self.c_str(), O_RDONLY);
+        if(srcFD < 0)
+            sys_fatal("Could not open {}", self);
+        auto srcGuard = sg::make_scope_guard([&]{ close(srcFD); });
+
+        if(!os::copy_from_to_fd(srcFD, fd, binarySize))
+            fatal("Could not copy our binary to {}", dest);
+
+        if(!os::write_to_fd(fd, serializedInstall))
+            fatal("Could not write install segment to {}", dest);
+    }
+
+    // Make executable
+    fs::permissions(dest, fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec, fs::perm_options::add);
+
+    info("tiny_runtime installed into image.");
+
+    return 0;
+}
+
+bool docker(const fs::path& self, const Segments& segments, Args& args)
+{
+    fs::path out = fs::absolute(*args.docker_out);
+
+    if(fs::exists(out))
+        fatal("Output file '{}' already exists. Please remove it first.", out);
+
+    char tempDir[] = {"/tmp/tiny_runtime-XXXXXX"};
+    if(!mkdtemp(tempDir))
+        sys_fatal("Could not create temporary directory");
+
+    auto guard = sg::make_scope_guard([&]{ fs::remove_all(tempDir); });
+
+    fs::path mksquashfs = fs::path{tempDir} / "mksquashfs";
+    writeTool(self.c_str(), segments.mksquashfs, mksquashfs.c_str());
+
+    bool success = os::run(
+        "docker", "run",
+        "-v", fmt::format("{}:/mksquashfs", mksquashfs).c_str(),
+        "-v", fmt::format("{}:/mksquashfs_out", out.parent_path()).c_str(),
+        "-it", args.docker->c_str(),
+
+        "/mksquashfs",
+        "/",
+        (fs::path("/mksquashfs_out") / out.filename()).c_str(),
+        "-one-file-system",
+        "-comp", "zstd", "-Xcompression-level", "8",
+        "-e", "/mksquashfs",
+        "-e", "/mksquashfs_out"
+    );
+    if(!success)
+    {
+        error("Calling mksquashfs inside docker failed (rerun with --verbose to see command)");
+        return false;
+    }
+
+    success = os::run(
+        "docker", "run",
+        "-v", fmt::format("{}:/mksquashfs_out", out.parent_path()).c_str(),
+        "-it", "alpine",
+        "chown",
+            fmt::format("{}:{}", getuid(), getgid()).c_str(),
+            (fs::path("/mksquashfs_out") / out.filename()).c_str()
+    );
+    if(!success)
+        error("Could not change owner of {}", out);
+
+    // Transition to --install
+    return install(self, segments, args, out);
 }
 
 int main(int argc, char** argv)
@@ -299,6 +437,14 @@ int main(int argc, char** argv)
     // Logging
     log_debug = args.verbose;
 
+    if(args.docker)
+    {
+        if(!docker(self, segments, args))
+            return 1;
+
+        return 0;
+    }
+
     struct
     {
         std::string file;
@@ -311,71 +457,8 @@ int main(int argc, char** argv)
             fatal("You supplied --install and --image, which does not make any sense.");
 
         fs::path dest = *args.install;
-        info("Installing into {}", dest);
-
-        if(isELF(dest.c_str()))
-        {
-            info("{} is already an ELF executable. Checking if it is a tiny_runtime...", dest);
-            Segments prevSegments = findSegments(dest.c_str());
-
-            if(!prevSegments.install)
-                fatal("{} is something else.", dest);
-
-            info("it is.");
-
-            if(!os::remove_leading_space(dest, prevSegments.image.offset))
-                fatal("Could not remove tiny_runtime from image {}", dest);
-        }
-
-        InstallSegment installSegment;
-
-        // Serialize args (without --install)
-        args.install = {};
-        installSegment.args = argparser::serialize(args);
-
-        const std::size_t serializedSize = serialization::serializedSize(installSegment);
-
-        // Pad such that our binary + install segment ends at 4KB boundary
-        const std::size_t binarySize = segments.fuseOverlay.offset + segments.fuseOverlay.size;
-        const std::size_t combinedSize = binarySize + serializedSize;
-        const std::size_t paddedSize = ((combinedSize + 4096 - 1) / 4096) * 4096;
-        const std::size_t paddedInstallSize = paddedSize - binarySize;
-
-        installSegment.segmentSize = paddedInstallSize;
-        std::vector<char> serializedInstall(paddedInstallSize, 0);
-
-        {
-            std::ospanstream out(serializedInstall);
-            if(!serialization::serializeInto(installSegment, out))
-                fatal("Could not serialize install segment");
-        }
-
-        if(!os::prepend_space_to_file(dest, paddedSize))
-            fatal("Could not prepend space to file");
-
-        // Write everything to front of file
-        {
-            int fd = open(dest.c_str(), O_WRONLY);
-            if(fd < 0)
-                sys_fatal("Could not open {}", dest);
-            auto fdGuard = sg::make_scope_guard([&]{ close(fd); });
-
-            int srcFD = open(self.c_str(), O_RDONLY);
-            if(srcFD < 0)
-                sys_fatal("Could not open {}", self);
-            auto srcGuard = sg::make_scope_guard([&]{ close(srcFD); });
-
-            if(!os::copy_from_to_fd(srcFD, fd, binarySize))
-                fatal("Could not copy our binary to {}", dest);
-
-            if(!os::write_to_fd(fd, serializedInstall))
-                fatal("Could not write install segment to {}", dest);
-        }
-
-        // Make executable
-        fs::permissions(dest, fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec, fs::perm_options::add);
-
-        info("tiny_runtime installed into image.");
+        if(!install(self, segments, args, dest))
+            return 1;
 
         return 0;
     }

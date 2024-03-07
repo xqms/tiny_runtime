@@ -69,6 +69,46 @@ bool run_with_caps(const char* cmd, Args&& ... args)
     return true;
 }
 
+template<std::convertible_to<const char*> ... Args>
+[[nodiscard]]
+pid_t fork_and_execv(const char* cmd, Args ... args)
+{
+    auto pid = fork();
+    if(pid == 0)
+    {
+        auto argsCopy = std::to_array<char*>({
+            strdup(cmd),
+            strdup(args)...,
+            static_cast<char*>(nullptr)
+        });
+
+        debug("Running {}", argsCopy);
+
+        if(execvp(cmd, argsCopy.data()) != 0)
+            sys_fatal("Could not run {}", cmd);
+    }
+    if(pid < 0)
+        sys_fatal("Could not fork()");
+
+    return pid;
+}
+
+template<std::convertible_to<const char*> ... Args>
+[[nodiscard]]
+bool run(const char* cmd, Args&& ... args)
+{
+    auto pid = fork_and_execv(cmd, std::forward<Args>(args)...);
+
+    int wstatus = 0;
+    if(waitpid(pid, &wstatus, 0) <= 0)
+        sys_fatal("Could not wait for cmd {}", cmd);
+
+    if(!WIFEXITED(wstatus) || WEXITSTATUS(wstatus) != 0)
+        fatal("{} failed", cmd);
+
+    return true;
+}
+
 [[nodiscard]]
 bool bind_mount(const std::filesystem::path& outside, const std::optional<std::filesystem::path>& inside = {}, int flags = MS_BIND|MS_REC);
 
