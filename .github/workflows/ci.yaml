@@ -9,8 +9,6 @@ jobs:
     steps:
       - name: Check out repository code
         uses: actions/checkout@v4
-      - run: |
-          cd ${{ github.workspace }}
       - name: Configure and Build Project
         uses: threeal/cmake-action@v1.3.0
         with:
