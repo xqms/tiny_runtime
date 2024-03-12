@@ -12,6 +12,7 @@ Other features
 --------------
 
  * NVIDIA support (CUDA + GL)
+ * Supported container image formats: Plain SquashFS, Apptainer, Singularity, enroot
 
 Usage & examples
 ----------------
@@ -22,6 +23,24 @@ Usage & examples
    tiny_runtime --docker ubuntu:20.04 --docker-out ubuntu.trt
 
    ./ubuntu.trt
+   ```
+ * Directly running a SIF (Singularity/Apptainer) image
+   ```bash
+   tiny_runtime --image container.sif
+   ```
+ * Converting a SIF image into an executable file including `tiny_runtime`
+   ```bash
+   tiny_runtime --install container.sif
+   ./container.sif
+   ```
+ * Setting a fixed command to be run ("entrypoint")
+   ```bash
+   tiny_runtime --install container.sif nvidia-smi
+   ./container.sif
+   ```
+ * Tweaking options on an image with an entrypoint
+   ```bash
+   TRT_ARGS="--verbose" ./container.sif
    ```
 
 Installation
