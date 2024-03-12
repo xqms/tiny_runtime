@@ -531,6 +531,11 @@ int main(int argc, char** argv)
     int euid = geteuid();
     int egid = getegid();
 
+    // We might need information about the current user later. Sadly, because
+    // we are statically linked, we cannot use getpwuid() for this purpose, so
+    // shell out to getent.
+    auto userInfo = os::run_get_output("getent", "passwd", std::to_string(getuid()).c_str());
+
     mkdir(config::SESSION, 0777);
 
     // Create user namespace
@@ -638,7 +643,6 @@ int main(int argc, char** argv)
     auto bindMounts = std::to_array({
         "/dev",
         "/etc/hosts",
-        "/etc/passwd",
         "/etc/group",
         "/etc/resolv.conf",
         "/proc",
@@ -651,6 +655,43 @@ int main(int argc, char** argv)
     {
         if(!os::bind_mount(path))
             fatal("Could not mount {}", path);
+    }
+
+    // /etc/passwd is special. Since most of the time we are running on some kind
+    // of network-administrated machine, the local /etc/passwd file does not
+    // contain the user. Mounting all PAM/nsswitch machinery inside the container
+    // does not make much sense. So we just append a line for the current user.
+    {
+        std::ifstream in{"/etc/passwd"};
+        std::ofstream out{std::string{config::FINAL / "etc/passwd"}};
+        std::string line;
+        bool found = false;
+        std::string myUIDString = std::to_string(getuid());
+
+        while(std::getline(in, line))
+        {
+            std::vector<std::string_view> split;
+            for(auto part : line | std::views::split(':'))
+                split.push_back(std::string_view{part});
+
+            if(split.size() != 7)
+                continue;
+
+            std::string_view uid = split[2];
+
+            if(uid == myUIDString)
+                found = true;
+
+            out << line << "\n";
+        }
+
+        if(!found)
+        {
+            if(userInfo)
+                out << *userInfo;
+            else
+                error("Could not obtain user information");
+        }
     }
 
     // Mount $HOME

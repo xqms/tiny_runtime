@@ -173,7 +173,10 @@ std::optional<std::string> run_get_output(const char* cmd, Args&& ... args)
 
     if(!WIFEXITED(wstatus) || WEXITSTATUS(wstatus) != 0)
     {
-        error("{} failed", cmd);
+        if(WIFEXITED(wstatus))
+            error("{} failed with exit code {}", cmd, WEXITSTATUS(wstatus));
+        else
+            error("{} failed/crashed", cmd);
         return {};
     }
 
