@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <wordexp.h>
 #include <sys/stat.h>
 #include <sys/mount.h>
 #include <sys/wait.h>
@@ -445,6 +446,28 @@ int main(int argc, char** argv)
     try
     {
         argparser::Parser parser{args};
+
+        // Additional arguments from environment variable TRT_ARGS
+        if(auto env = getenv("TRT_ARGS"))
+        {
+            wordexp_t words{};
+            auto guard = sg::make_scope_guard([&]{ wordfree(&words); });
+
+            if(auto ret = wordexp(env, &words, WRDE_SHOWERR))
+            {
+                switch(ret)
+                {
+                    case WRDE_BADCHAR: fatal("Invalid character in TRT_ARGS");
+                    case WRDE_BADVAL:  fatal("Undefined env variable in TRT_ARGS");
+                    case WRDE_CMDSUB:  fatal("Command substitution failed in TRT_ARGS");
+                    case WRDE_NOSPACE: fatal("Out of memory");
+                    case WRDE_SYNTAX:  fatal("Syntax error in TRT_ARGS");
+                }
+                fatal("Unknown wordexp() error");
+            }
+
+            parser.parse(std::span<char*>(words.we_wordv, words.we_wordc));
+        }
 
         if(segments.install)
             parser.parse(segments.install->args);
