@@ -253,6 +253,7 @@ static bool start_overlayfs()
 struct Args
 {
     argparser::Option<bool, {.shortName='h'}> help = false;
+    bool version = false;
 
     std::optional<std::string> image;
     std::vector<std::string> bind;
@@ -272,6 +273,7 @@ Usage: tiny_runtime [options] [cmd to execute in container...]
 
 Options:
   --help                   This help screen.
+  --version                Print version information.
   --image IMAGE            Use image IMAGE.
   --bind PATH              Make PATH from outside available as PATH in container.
   --bind OUTSIDE:INSIDE    Make OUTSIDE available as INSIDE in container.
@@ -484,6 +486,12 @@ int main(int argc, char** argv)
     if(args.help)
     {
         usage();
+        return 0;
+    }
+
+    if(args.version)
+    {
+        fmt::print("{}.{}.{}\n", VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH);
         return 0;
     }
 

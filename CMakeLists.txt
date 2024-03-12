@@ -3,6 +3,10 @@ cmake_minimum_required(VERSION 3.12)
 
 project(tiny_runtime)
 
+set(VERSION_MAJOR 1)
+set(VERSION_MINOR 1)
+set(VERSION_PATCH 0)
+
 include(ExternalProject)
 ExternalProject_Add(squashfuse
     URL https://github.com/vasi/squashfuse/releases/download/0.5.2/squashfuse-0.5.2.tar.gz
@@ -63,6 +67,11 @@ target_link_libraries(tiny_runtime_starter
 )
 target_link_options(tiny_runtime_starter PRIVATE
     "-static"
+)
+target_compile_definitions(tiny_runtime_starter PRIVATE
+    VERSION_MAJOR=${VERSION_MAJOR}
+    VERSION_MINOR=${VERSION_MINOR}
+    VERSION_PATCH=${VERSION_PATCH}
 )
 
 ExternalProject_Get_Property(fuse_overlayfs DOWNLOAD_DIR)
