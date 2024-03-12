@@ -46,7 +46,14 @@ Usage & examples
 Installation
 ------------
 
-... WIP ...
+You can download the latest binary from the release page (https://github.com/xqms/tiny_runtime/releases/)
+or build your own from source.
+
+One-line install in `/usr/local/bin` (requires root):
+
+```bash
+wget -O /tmp/tiny_runtime 'https://github.com/xqms/tiny_runtime/releases/latest/download/tiny_runtime' && sudo install /tmp/tiny_runtime /usr/local/bin/tiny_runtime
+```
 
 Building from source
 --------------------
