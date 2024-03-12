@@ -8,7 +8,7 @@
 
 namespace config
 {
-    constexpr auto SESSION = StaticPath("/tmp/tinyruntime-session");
+    constexpr auto SESSION = StaticPath("/mnt");
     constexpr auto ROOTFS = SESSION / "root";
     constexpr auto FINAL = SESSION / "final";
     constexpr auto UPPER = SESSION / "upper";
