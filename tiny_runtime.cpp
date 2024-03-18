@@ -829,7 +829,7 @@ int main(int argc, char** argv)
         runArgs.push_back(nullptr);
 
         debug("Running {}", runArgs | std::views::take(runArgs.size()-1));
-        if(execv(cmd.c_str(), runArgs.data()) != 0)
+        if(execvp(cmd.c_str(), runArgs.data()) != 0)
             sys_fatal("Could not execute {}", runArgs | std::views::take(runArgs.size()-1));
     }
 
