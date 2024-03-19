@@ -752,19 +752,23 @@ int main(int argc, char** argv)
     }
 
     // Custom mounts
-    for(auto& path : args.bind)
+    for(auto& bindArg : args.bind)
     {
-        auto sep = path.find(':');
-        if(sep != path.npos)
+        for(auto bindPart : bindArg | std::views::split(','))
         {
-            auto outside = path.substr(0, sep);
-            auto inside = path.substr(sep+1);
-            if(!os::bind_mount(outside, inside))
-                fatal("Could not bind {} to {} inside container", outside, inside);
+            auto bind = std::string_view{bindPart};
+            auto sep = bind.find(':');
+            if(sep != bind.npos)
+            {
+                auto outside = bind.substr(0, sep);
+                auto inside = bind.substr(sep+1);
+                if(!os::bind_mount(outside, inside))
+                    fatal("Could not bind {} to {} inside container", outside, inside);
+            }
+            else
+                if(!os::bind_mount(bind))
+                    fatal("Could not bind {} inside container", bind);
         }
-        else
-            if(!os::bind_mount(path))
-                fatal("Could not bind {} inside container", path);
     }
 
     // Mount nvidia tools & libraries
