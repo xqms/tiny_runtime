@@ -292,6 +292,8 @@ bool install(const fs::path& self, const Segments& segments, Args& args, const f
 {
     info("Installing into {}", dest);
 
+    InstallSegment installSegment;
+
     if(isELF(dest.c_str()))
     {
         info("{} is already an ELF executable. Checking if it is a tiny_runtime...", dest);
@@ -302,17 +304,30 @@ bool install(const fs::path& self, const Segments& segments, Args& args, const f
 
         info("it is.");
 
+        if(!prevSegments.install->args.empty())
+        {
+            info("Its runtime arguments are:");
+            info("{}", prevSegments.install->args);
+            info("Do you want to keep these? [Y/n]");
+
+            std::string line;
+            std::getline(std::cin, line);
+            if(line == "Y")
+                installSegment.args = prevSegments.install->args;
+        }
+
         if(!os::remove_leading_space(dest, prevSegments.image.offset))
             fatal("Could not remove tiny_runtime from image {}", dest);
     }
 
-    InstallSegment installSegment;
-
-    // Serialize args (without --install or --docker)
-    args.install = {};
-    args.docker = {};
-    args.docker_out = {};
-    installSegment.args = argparser::serialize(args);
+    if(installSegment.args.empty())
+    {
+        // Serialize args (without --install or --docker)
+        args.install = {};
+        args.docker = {};
+        args.docker_out = {};
+        installSegment.args = argparser::serialize(args);
+    }
 
     const std::size_t serializedSize = serialization::serializedSize(installSegment);
 
