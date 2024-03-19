@@ -124,6 +124,7 @@ bool bind_mount(const std::filesystem::path& outside, const std::optional<std::f
         }
     }
 
+    debug("Binding {} to {}", source, target);
     if(mount(source.c_str(), target.c_str(), nullptr, flags, nullptr) != 0)
     {
         sys_error("Could not bind-mount {} to {} in container (flags={})", source, targetInContainer, flags);
