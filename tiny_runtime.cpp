@@ -558,6 +558,7 @@ int main(int argc, char** argv)
     // we are statically linked, we cannot use getpwuid() for this purpose, so
     // shell out to getent.
     auto userInfo = os::run_get_output("getent", "passwd", std::to_string(getuid()).c_str());
+    auto groupInfo = os::run_get_output("getent", "group", std::to_string(getgid()).c_str());
 
     mkdir(config::SESSION, 0777);
 
@@ -714,6 +715,40 @@ int main(int argc, char** argv)
                 out << *userInfo;
             else
                 error("Could not obtain user information");
+        }
+    }
+
+    // Same for groups
+    {
+        std::ifstream in{"/etc/group"};
+        std::ofstream out{std::string{config::FINAL / "etc/group"}};
+        std::string line;
+        bool found = false;
+        std::string myGIDString = std::to_string(getgid());
+
+        while(std::getline(in, line))
+        {
+            std::vector<std::string_view> split;
+            for(auto part : line | std::views::split(':'))
+                split.push_back(std::string_view{part});
+
+            if(split.size() != 4)
+                continue;
+
+            std::string_view gid = split[2];
+
+            if(gid == myGIDString)
+                found = true;
+
+            out << line << "\n";
+        }
+
+        if(!found)
+        {
+            if(groupInfo)
+                out << *groupInfo;
+            else
+                error("Could not obtain group information");
         }
     }
 
