@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.12)
 project(tiny_runtime)
 
 set(VERSION_MAJOR 1)
-set(VERSION_MINOR 2)
+set(VERSION_MINOR 3)
 set(VERSION_PATCH 0)
 
 include(ExternalProject)
