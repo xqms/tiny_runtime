@@ -15,6 +15,7 @@
 #include <sys/capability.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <linux/falloc.h>
 
 #include "log.h"
 #include "scope_guard.h"
