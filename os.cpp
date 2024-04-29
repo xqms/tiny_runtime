@@ -25,6 +25,10 @@ namespace fs = std::filesystem;
 namespace os
 {
 
+// musl has 64-bit off_t, so use that and make sure we don't
+// accidentally use 32-bit off_t on other systems.
+static_assert(sizeof(off_t) == 8);
+
 void create_directory(const char* path)
 {
     if(mkdir(path, 0777) != 0)
@@ -36,8 +40,8 @@ std::size_t file_size(const char* path)
     int fd = open(path, O_RDONLY);
     if(fd < 0)
         sys_fatal("Could not open myself");
-    auto off = lseek64(fd, 0, SEEK_END);
-    if(off == (off64_t)-1)
+    auto off = lseek(fd, 0, SEEK_END);
+    if(off == (off_t)-1)
         sys_fatal("Could not seek");
     close(fd);
 
@@ -267,7 +271,7 @@ bool remove_leading_space(const std::filesystem::path& path, std::size_t amount)
         return false;
     }
 
-    if(lseek64(srcFD, amount, SEEK_SET) != static_cast<off64_t>(amount))
+    if(lseek(srcFD, amount, SEEK_SET) != static_cast<off_t>(amount))
     {
         sys_error("Could not seek in {}", tempFile);
         return false;

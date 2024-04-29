@@ -153,7 +153,8 @@ static void writeTool(const char* file, const Segment& segment, const char* dest
 
     auto guard_src = sg::make_scope_guard([&]{ close(fd_src); });
 
-    if(lseek64(fd_src, segment.offset, SEEK_SET) != static_cast<off64_t>(segment.offset))
+    static_assert(sizeof(off_t) == 8);
+    if(lseek(fd_src, segment.offset, SEEK_SET) != static_cast<off_t>(segment.offset))
         sys_fatal("Could not seek to tool at offset {} in {}", segment.offset, file);
 
     int fd_dst = open(dest, O_RDWR | O_CREAT, 0755);
