@@ -58,11 +58,8 @@ wget -O /tmp/tiny_runtime 'https://github.com/xqms/tiny_runtime/releases/latest/
 Building from source
 --------------------
 
-Dependencies:
-
-```bash
-sudo apt install libfuse3-dev libcap-dev libzstd-dev
-```
+We recommend building in Alpine Linux to link against musl-libc. See utils/build_container for a
+docker container for this purpose.
 
 Compilation:
 
