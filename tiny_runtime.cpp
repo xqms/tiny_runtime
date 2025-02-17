@@ -458,6 +458,50 @@ bool docker(const fs::path& self, const Segments& segments, Args& args)
     return install(self, segments, args, out);
 }
 
+void delegate_to_system_trt(Args args, const fs::path& image)
+{
+    fs::path sysPath{"/usr/bin/tiny_runtime"};
+    fs::path aaPath{"/etc/apparmor.d/tiny_runtime"};
+    if(!fs::exists(sysPath) || !fs::exists(aaPath))
+    {
+        fatal(
+            "Your system has AppArmor restrictions on unprivileged user namespaces "
+            "(see https://ubuntu.com/blog/ubuntu-23-10-restricted-unprivileged-user-namespaces). "
+            "The only way around these is to install tiny_runtime system-wide.");
+    }
+
+    // Check version
+    if(auto out = os::run_get_output(sysPath.c_str(), "--version"))
+    {
+        std::stringstream ss{*out};
+        int major = 0, minor = 0, patch = 0;
+        char sep;
+        ss >> major >> sep >> minor >> sep >> patch;
+
+        debug("System version has version {}.{}.{}", major, minor, patch);
+
+        if(major < VERSION_MAJOR || (major == VERSION_MAJOR && minor < VERSION_MINOR) || (major == VERSION_MAJOR && minor == VERSION_MINOR && patch < VERSION_PATCH))
+        {
+            warning("The system version of tiny_runtime is older than this one. I will try to delegate to the system version, but you might run into compatibility issues.");
+        }
+    }
+
+    if(!args.image)
+        args.image = image;
+
+    auto argList = argparser::serialize(args);
+    debug("Running {} {}", sysPath, argList);
+
+    std::vector<char*> argCopy;
+    argCopy.push_back(strdup("tiny_runtime"));
+    for(auto& arg : argList)
+        argCopy.push_back(strdup(arg.c_str()));
+    argCopy.push_back(nullptr);
+
+    if(execv(sysPath.c_str(), argCopy.data()) != 0)
+        fatal("Could not execute {}", sysPath);
+}
+
 int main(int argc, char** argv)
 {
     // Find our executable
@@ -548,13 +592,27 @@ int main(int argc, char** argv)
     }
 
     if(args.image)
-        image = {*args.image, 0};
+    {
+        if(isELF(args.image->c_str()))
+        {
+            auto segments = findSegments(args.image->c_str());
+            image = {*args.image, segments.image.offset};
+        }
+        else
+            image = {*args.image, 0};
+    }
     else
     {
         if(segments.image.size == 0)
             fatal("Either need --image or an image file concatenated to tiny_runtime");
 
         image = {self, segments.image.offset};
+    }
+
+    if(os::apparmor_restricts_userns())
+    {
+        info("AppArmor restricts user namespaces on this system. Trying to delegate to installed version of tiny_runtime...");
+        delegate_to_system_trt(args, image.file);
     }
 
     int euid = geteuid();

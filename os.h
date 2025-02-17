@@ -201,6 +201,9 @@ bool copy_from_to_fd(int srcFD, int dstFD, const std::optional<std::size_t>& max
 [[nodiscard]]
 bool write_to_fd(int fd, const std::span<char>& data);
 
+[[nodiscard]]
+bool apparmor_restricts_userns();
+
 }
 
 #endif

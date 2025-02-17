@@ -366,4 +366,41 @@ bool write_to_fd(int fd, const std::span<char>& data)
     return true;
 }
 
+bool apparmor_restricts_userns()
+{
+    auto procPath = fs::path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns");
+    if(!fs::exists(procPath))
+        return false; // No AppArmor or older version that does not restrict
+
+    int restrict = 1;
+    std::ifstream in{procPath};
+    in >> restrict;
+
+    if(restrict == 0)
+        return false; // restriction disabled globally
+
+    // Try!
+    auto childPid = fork();
+    if(childPid == 0)
+    {
+        if(unshare(CLONE_NEWUSER) != 0)
+            exit(1);
+
+        int fd = open("/proc/self/setgroups", O_WRONLY);
+        if(fd < 0)
+            exit(1);
+
+        exit(0);
+    }
+
+    int status = 0;
+    int ret = waitpid(childPid, &status, 0);
+    if(ret < 0)
+        sys_fatal("Could not waitpid()");
+
+    bool success = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+
+    return !success;
+}
+
 }

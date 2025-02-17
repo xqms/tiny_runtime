@@ -17,6 +17,12 @@ void log(FILE* file, Level&& level, const std::string& msg)
 }
 
 template<typename ... Args>
+void warning(const fmt::format_string<Args...>& format, Args&& ... args)
+{
+    log(stderr, fmt::styled("WARNING", fmt::fg(fmt::color::yellow)), fmt::format(format, std::forward<Args>(args)...));
+}
+
+template<typename ... Args>
 void error(const fmt::format_string<Args...>& format, Args&& ... args)
 {
     log(stderr, fmt::styled("ERROR", fmt::fg(fmt::color::red)), fmt::format(format, std::forward<Args>(args)...));
@@ -68,7 +74,7 @@ void debug(const fmt::format_string<Args...>& format, Args&& ... args)
     if(!log_debug)
         return;
 
-    log(stderr, fmt::styled("DEBUG", fmt::fg(fmt::color::yellow)), fmt::format(format, std::forward<Args>(args)...));
+    log(stderr, fmt::styled("DEBUG", fmt::fg(fmt::color::orange)), fmt::format(format, std::forward<Args>(args)...));
 }
 
 #endif
