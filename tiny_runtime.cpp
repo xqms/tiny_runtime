@@ -131,6 +131,7 @@ static Segments findSegments(const char* file)
 
     // Install segment present?
     {
+        debug("Looking for install segment at offset {}", offset);
         std::ifstream input(file);
         input.seekg(offset);
 
@@ -337,6 +338,9 @@ bool install(const fs::path& self, const Segments& segments, Args& args, const f
     const std::size_t combinedSize = binarySize + serializedSize;
     const std::size_t paddedSize = ((combinedSize + 4096 - 1) / 4096) * 4096;
     const std::size_t paddedInstallSize = paddedSize - binarySize;
+
+    debug("serializedSize: {}, binarySize: {}, combinedSize: {}, paddedSize: {}, paddedInstallSize: {}",
+        serializedSize, binarySize, combinedSize, paddedSize, paddedInstallSize);
 
     installSegment.segmentSize = paddedInstallSize;
     std::vector<char> serializedInstall(paddedInstallSize, 0);
