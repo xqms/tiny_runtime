@@ -673,7 +673,6 @@ int main(int argc, char** argv)
     auto bindMounts = std::to_array({
         "/dev",
         "/etc/hosts",
-        "/etc/group",
         "/etc/resolv.conf",
         "/proc",
         "/sys",
