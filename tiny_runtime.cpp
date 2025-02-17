@@ -328,6 +328,7 @@ bool install(const fs::path& self, const Segments& segments, Args& args, const f
         args.install = {};
         args.docker = {};
         args.docker_out = {};
+        args.verbose = {};
         installSegment.args = argparser::serialize(args);
     }
 
