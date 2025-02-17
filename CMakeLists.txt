@@ -5,7 +5,7 @@ project(tiny_runtime)
 
 set(VERSION_MAJOR 1)
 set(VERSION_MINOR 3)
-set(VERSION_PATCH 1)
+set(VERSION_PATCH 2)
 
 include(ExternalProject)
 ExternalProject_Add(squashfuse
