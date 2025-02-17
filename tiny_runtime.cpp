@@ -314,7 +314,7 @@ bool install(const fs::path& self, const Segments& segments, Args& args, const f
 
             std::string line;
             std::getline(std::cin, line);
-            if(line == "Y")
+            if(line == "Y" || line == "y" || line == "")
                 installSegment.args = prevSegments.install->args;
         }
 
