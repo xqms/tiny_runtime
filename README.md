@@ -49,7 +49,13 @@ Installation
 You can download the latest binary from the release page (https://github.com/xqms/tiny_runtime/releases/)
 or build your own from source.
 
-One-line install in `/usr/local/bin` (requires root):
+One-line install for Debian/Ubuntu:
+
+```bash
+wget -O/tmp/tiny_runtime.deb 'https://github.com/xqms/tiny_runtime/releases/latest/download/tiny_runtime.deb' && sudo dpkg -i /tmp/tiny_runtime.deb
+```
+
+Other systems:
 
 ```bash
 wget -O /tmp/tiny_runtime 'https://github.com/xqms/tiny_runtime/releases/latest/download/tiny_runtime' && sudo install /tmp/tiny_runtime /usr/local/bin/tiny_runtime
