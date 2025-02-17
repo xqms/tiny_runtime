@@ -178,6 +178,10 @@ namespace detail
             return;
 
         const auto& value = reflect::get<N>(args);
+        const auto defaultValue = reflect::get<N>(ArgClass{});
+
+        if(value == defaultValue)
+            return;
 
         std::string name = std::string{reflect::member_name<N>(args)};
         std::ranges::replace(name, '_', '-');
