@@ -467,7 +467,8 @@ void delegate_to_system_trt(Args args, const fs::path& image)
         fatal(
             "Your system has AppArmor restrictions on unprivileged user namespaces "
             "(see https://ubuntu.com/blog/ubuntu-23-10-restricted-unprivileged-user-namespaces). "
-            "The only way around these is to install tiny_runtime system-wide.");
+            "The only way around these is to install tiny_runtime system-wide:\n"
+            "    wget -O/tmp/tiny_runtime.deb 'https://github.com/xqms/tiny_runtime/releases/latest/download/tiny_runtime.deb' && sudo dpkg -i /tmp/tiny_runtime.deb");
     }
 
     // Check version
