@@ -71,7 +71,7 @@ namespace serialization
 
     template<typename Stream, typename T>
     [[nodiscard]]
-    bool deserializeInto(Stream& stream, T& dest, std::size_t sizeLimit = 1024)
+    bool deserializeInto(Stream& stream, T& dest, std::size_t sizeLimit = 100*1024)
     {
         if constexpr(std::is_integral_v<T> || std::is_enum_v<T>)
         {
