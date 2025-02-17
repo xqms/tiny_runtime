@@ -91,3 +91,17 @@ add_custom_command(
 add_custom_target(build_tiny_runtime ALL
     DEPENDS tiny_runtime
 )
+
+install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/tiny_runtime DESTINATION bin)
+install(FILES utils/apparmor/tiny_runtime DESTINATION /etc/apparmor.d/)
+
+# Packaging
+set(CPACK_DEBIAN_PACKAGE_NAME tiny_runtime)
+set(CPACK_DEBIAN_FILE_NAME tiny_runtime.deb)
+set(CPACK_DEBIAN_PACKAGE_VERSION "${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}")
+set(CPACK_PACKAGING_INSTALL_PREFIX "/usr")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "")
+set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "all")
+set(CPACK_PACKAGE_CONTACT "Max Schwarz <max.schwarz@ais.uni-bonn.de>")
+include(CPack)
+
