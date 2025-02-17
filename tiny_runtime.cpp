@@ -760,8 +760,18 @@ int main(int argc, char** argv)
     // Mount $HOME
     if(auto home = getenv("HOME"))
     {
-        if(!os::bind_mount(home))
-            fatal("Could not mount your home directory '{}'", home);
+        auto homePath = fs::path(home);
+
+        while(fs::is_symlink(homePath))
+        {
+            if(!os::bind_mount(homePath))
+                fatal("Could not mount your home directory '{}'", homePath);
+
+            homePath = fs::read_symlink(homePath);
+        }
+
+        if(!os::bind_mount(homePath))
+            fatal("Could not mount your home directory '{}'", homePath);
     }
 
     // Some helpful environment variables
