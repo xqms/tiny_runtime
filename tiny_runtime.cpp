@@ -784,6 +784,12 @@ int main(int argc, char **argv) {
       fatal("Could not mount your home directory '{}'", homePath);
   }
 
+  // If we have /media, mount it
+  if (fs::exists("/media")) {
+    if (!os::bind_mount("/media"))
+      fatal("Could not mount /media");
+  }
+
   // Some helpful environment variables
   {
     // Since we auto-mount $HOME, a python instance in the container might look
