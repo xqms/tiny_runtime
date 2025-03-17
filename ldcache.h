@@ -4,28 +4,27 @@
 #ifndef LDCACHE_H
 #define LDCACHE_H
 
+#include <filesystem>
 #include <memory>
 #include <span>
 #include <vector>
-#include <filesystem>
 
-class LDCache
-{
+class LDCache {
 public:
-    LDCache();
-    ~LDCache();
+  LDCache();
+  ~LDCache();
 
-    struct Entry
-    {
-        std::string_view key;
-        std::filesystem::path path;
-    };
+  struct Entry {
+    std::string_view key;
+    std::filesystem::path path;
+  };
 
-    std::vector<Entry> resolve(const std::span<const char* const>& libraries) const;
+  std::vector<Entry>
+  resolve(const std::span<const char *const> &libraries) const;
 
 private:
-    class Private;
-    std::unique_ptr<Private> m_d;
+  class Private;
+  std::unique_ptr<Private> m_d;
 };
 
 #endif

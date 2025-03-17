@@ -4,9 +4,8 @@
 #ifndef NVIDIA_H
 #define NVIDIA_H
 
-namespace nvidia
-{
-    bool configure();
+namespace nvidia {
+bool configure();
 }
 
 #endif

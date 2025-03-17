@@ -7,8 +7,8 @@
 #include <cstdlib>
 #include <optional>
 
-std::optional<std::size_t> getELFSize(const char* file, std::size_t offset);
+std::optional<std::size_t> getELFSize(const char *file, std::size_t offset);
 
-bool isELF(const char* file);
+bool isELF(const char *file);
 
 #endif

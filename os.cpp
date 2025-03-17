@@ -3,404 +3,375 @@
 
 #include "os.h"
 
-#include <array>
 #include <algorithm>
+#include <array>
 #include <fstream>
 #include <ranges>
 
 #include <fmt/std.h>
 
+#include <fcntl.h>
+#include <linux/falloc.h>
+#include <sys/capability.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/capability.h>
-#include <fcntl.h>
 #include <unistd.h>
-#include <linux/falloc.h>
 
+#include "config.h"
 #include "log.h"
 #include "scope_guard.h"
-#include "config.h"
 
 namespace fs = std::filesystem;
 
-namespace os
-{
+namespace os {
 
 // musl has 64-bit off_t, so use that and make sure we don't
 // accidentally use 32-bit off_t on other systems.
 static_assert(sizeof(off_t) == 8);
 
-void create_directory(const char* path)
-{
-    if(mkdir(path, 0777) != 0)
-        sys_fatal("Could not create directory '{}'", path);
+void create_directory(const char *path) {
+  if (mkdir(path, 0777) != 0)
+    sys_fatal("Could not create directory '{}'", path);
 }
 
-std::size_t file_size(const char* path)
-{
-    int fd = open(path, O_RDONLY);
-    if(fd < 0)
-        sys_fatal("Could not open myself");
-    auto off = lseek(fd, 0, SEEK_END);
-    if(off == (off_t)-1)
-        sys_fatal("Could not seek");
-    close(fd);
+std::size_t file_size(const char *path) {
+  int fd = open(path, O_RDONLY);
+  if (fd < 0)
+    sys_fatal("Could not open myself");
+  auto off = lseek(fd, 0, SEEK_END);
+  if (off == (off_t)-1)
+    sys_fatal("Could not seek");
+  close(fd);
 
-    return off;
+  return off;
 }
 
-void set_ambient_caps()
-{
-    cap_t caps = cap_get_proc();
-    if(!caps)
-        sys_fatal("Could not get caps");
+void set_ambient_caps() {
+  cap_t caps = cap_get_proc();
+  if (!caps)
+    sys_fatal("Could not get caps");
 
-    auto guard = sg::make_scope_guard([&]{ cap_free(caps); });
+  auto guard = sg::make_scope_guard([&] { cap_free(caps); });
 
-    auto cap_list = std::to_array({
-        CAP_SYS_ADMIN, CAP_DAC_OVERRIDE, CAP_MKNOD, CAP_CHOWN,
-        CAP_DAC_OVERRIDE, CAP_DAC_READ_SEARCH, CAP_FOWNER,
-        CAP_KILL, CAP_NET_ADMIN, CAP_SETGID, CAP_SETPCAP,
-        CAP_SETUID, CAP_SYS_CHROOT, CAP_SYS_PTRACE
-    });
-    if(cap_set_flag(caps, CAP_INHERITABLE, cap_list.size(), cap_list.data(), CAP_SET) != 0)
-        sys_fatal("Could not set cap flags");
-    if(cap_set_flag(caps, CAP_PERMITTED, cap_list.size(), cap_list.data(), CAP_SET) != 0)
-        sys_fatal("Could not set cap flags");
+  auto cap_list = std::to_array(
+      {CAP_SYS_ADMIN, CAP_DAC_OVERRIDE, CAP_MKNOD, CAP_CHOWN, CAP_DAC_OVERRIDE,
+       CAP_DAC_READ_SEARCH, CAP_FOWNER, CAP_KILL, CAP_NET_ADMIN, CAP_SETGID,
+       CAP_SETPCAP, CAP_SETUID, CAP_SYS_CHROOT, CAP_SYS_PTRACE});
+  if (cap_set_flag(caps, CAP_INHERITABLE, cap_list.size(), cap_list.data(),
+                   CAP_SET) != 0)
+    sys_fatal("Could not set cap flags");
+  if (cap_set_flag(caps, CAP_PERMITTED, cap_list.size(), cap_list.data(),
+                   CAP_SET) != 0)
+    sys_fatal("Could not set cap flags");
 
-    if(cap_set_proc(caps) != 0)
-        sys_fatal("Could not set capabilities");
+  if (cap_set_proc(caps) != 0)
+    sys_fatal("Could not set capabilities");
 
-    for(auto& cap : cap_list)
-    {
-        if(cap_set_ambient(cap, CAP_SET) != 0)
-            sys_fatal("Could not set ambient cap {}", cap);
-    }
+  for (auto &cap : cap_list) {
+    if (cap_set_ambient(cap, CAP_SET) != 0)
+      sys_fatal("Could not set ambient cap {}", cap);
+  }
 }
 
-bool is_mountpoint(const char* path)
-{
-    std::ifstream mountfile{"/proc/mounts"};
-    if(!mountfile)
-        sys_fatal("Could not open /proc/mounts");
+bool is_mountpoint(const char *path) {
+  std::ifstream mountfile{"/proc/mounts"};
+  if (!mountfile)
+    sys_fatal("Could not open /proc/mounts");
 
-    for(std::string line; std::getline(mountfile, line);)
-    {
-        auto begin = line.find(' ');
-        if(begin == std::string::npos)
-        {
-            error("Could not parse mount line: '{}'", line);
-            continue;
-        }
-
-        auto end = line.find(' ', begin+1);
-        if(end == std::string::npos)
-        {
-            error("Could not parse mount line: '{}'", line);
-            continue;
-        }
-
-        std::string target = line.substr(begin+1, end-(begin+1));
-        std::ranges::replace(target, '\040', ' ');
-        if(target == path)
-            return true;
+  for (std::string line; std::getline(mountfile, line);) {
+    auto begin = line.find(' ');
+    if (begin == std::string::npos) {
+      error("Could not parse mount line: '{}'", line);
+      continue;
     }
 
-    return false;
+    auto end = line.find(' ', begin + 1);
+    if (end == std::string::npos) {
+      error("Could not parse mount line: '{}'", line);
+      continue;
+    }
+
+    std::string target = line.substr(begin + 1, end - (begin + 1));
+    std::ranges::replace(target, '\040', ' ');
+    if (target == path)
+      return true;
+  }
+
+  return false;
 }
 
 [[nodiscard]]
-bool bind_mount(const std::filesystem::path& outside, const std::optional<std::filesystem::path>& inside, int flags)
-{
-    namespace fs = std::filesystem;
-    fs::path source = outside;
-    fs::path targetInContainer = (inside ? (*inside) : outside);
-    fs::path target = fs::path{config::FINAL} / targetInContainer.relative_path();
+bool bind_mount(const std::filesystem::path &outside,
+                const std::optional<std::filesystem::path> &inside, int flags) {
+  namespace fs = std::filesystem;
+  fs::path source = outside;
+  fs::path targetInContainer = (inside ? (*inside) : outside);
+  fs::path target = fs::path{config::FINAL} / targetInContainer.relative_path();
 
-    if(fs::is_directory(source))
-        std::filesystem::create_directories(target);
-    else
-    {
-        std::filesystem::create_directories(target.parent_path());
-        if(!fs::exists(target))
-        {
-            int fd = open(target.c_str(), O_RDWR|O_CREAT, 0755);
-            close(fd);
-        }
+  if (fs::is_directory(source))
+    std::filesystem::create_directories(target);
+  else {
+    std::filesystem::create_directories(target.parent_path());
+    if (!fs::exists(target)) {
+      int fd = open(target.c_str(), O_RDWR | O_CREAT, 0755);
+      close(fd);
     }
+  }
 
-    debug("Binding {} to {}", source, target);
-    if(mount(source.c_str(), target.c_str(), nullptr, flags, nullptr) != 0)
-    {
-        sys_error("Could not bind-mount {} to {} in container (flags={})", source, targetInContainer, flags);
-        return false;
-    }
-    if(mount(nullptr, target.c_str(), nullptr, (flags & MS_REC)|MS_SLAVE, nullptr) != 0)
-    {
-        sys_error("Could not change {} to MS_SLAVE", target);
-        return false;
-    }
+  debug("Binding {} to {}", source, target);
+  if (mount(source.c_str(), target.c_str(), nullptr, flags, nullptr) != 0) {
+    sys_error("Could not bind-mount {} to {} in container (flags={})", source,
+              targetInContainer, flags);
+    return false;
+  }
+  if (mount(nullptr, target.c_str(), nullptr, (flags & MS_REC) | MS_SLAVE,
+            nullptr) != 0) {
+    sys_error("Could not change {} to MS_SLAVE", target);
+    return false;
+  }
 
-    return true;
+  return true;
 }
 
-std::optional<std::filesystem::path> find_binary(const std::string_view& name)
-{
-    std::string_view PATH = getenv("PATH") ? getenv("PATH") : "/bin:/usr/bin";
+std::optional<std::filesystem::path> find_binary(const std::string_view &name) {
+  std::string_view PATH = getenv("PATH") ? getenv("PATH") : "/bin:/usr/bin";
 
-    for(const auto dir : std::views::split(PATH, ':'))
-    {
-        auto path = fs::path(std::string_view(&*dir.begin(), std::ranges::distance(dir))) / fs::path(name);
-
-        std::error_code ec;
-        auto stat = fs::status(path, ec);
-
-        if(ec)
-            continue;
-
-        if(stat.type() != fs::file_type::directory && (stat.permissions() & fs::perms::owner_exec) != fs::perms::none)
-            return path;
-    }
-
-    return {};
-}
-
-bool prepend_space_to_file(const std::filesystem::path& path, std::size_t amount)
-{
-    // Try fallocate() first
-    {
-        int fd = open(path.c_str(), O_RDWR);
-        if(fd < 0)
-        {
-            sys_error("Could not open '{}'", path);
-            return false;
-        }
-        auto guard = sg::make_scope_guard([&]{ close(fd); });
-
-        int ret = fallocate(fd, FALLOC_FL_INSERT_RANGE, 0, amount);
-        if(ret == 0)
-            return true;
-
-        sys_error("Could not use fallocate() to prepend space to {}", path);
-        error("Falling back to slow copy mode");
-    }
-
-    fs::path tempFile = path;
-    tempFile += ".trt-temp";
+  for (const auto dir : std::views::split(PATH, ':')) {
+    auto path =
+        fs::path(std::string_view(&*dir.begin(), std::ranges::distance(dir))) /
+        fs::path(name);
 
     std::error_code ec;
-    fs::rename(path, tempFile, ec);
-    if(ec)
-    {
-        error("Could not rename {} to {}: {}", path, tempFile, ec);
-        return false;
-    }
+    auto stat = fs::status(path, ec);
 
-    auto unlinkGuard = sg::make_scope_guard([&]{
-        if(unlink(tempFile.c_str()) != 0)
-            sys_error("Could not remove temporary file {}", tempFile);
-    });
+    if (ec)
+      continue;
 
-    int srcFD = open(tempFile.c_str(), O_RDONLY);
-    if(srcFD < 0)
-    {
-        sys_error("Could not open {}", tempFile);
-        return false;
-    }
+    if (stat.type() != fs::file_type::directory &&
+        (stat.permissions() & fs::perms::owner_exec) != fs::perms::none)
+      return path;
+  }
 
-    struct stat statbuf{};
-    if(fstat(srcFD, &statbuf) != 0)
-    {
-        sys_error("Could not stat() {}", tempFile);
-        return false;
-    }
-
-    auto srcGuard = sg::make_scope_guard([&]{ close(srcFD); });
-
-    int dstFD = open(path.c_str(), O_WRONLY|O_TRUNC|O_CREAT, statbuf.st_mode);
-    if(dstFD < 0)
-    {
-        sys_error("Could not create {}", path);
-        return false;
-    }
-
-    std::vector<char> data(amount, 0);
-    if(write(dstFD, data.data(), data.size()) != static_cast<ssize_t>(data.size()))
-    {
-        sys_error("Could not write zeroes to {}", path);
-        return false;
-    }
-
-    return copy_from_to_fd(srcFD, dstFD);
+  return {};
 }
 
-bool remove_leading_space(const std::filesystem::path& path, std::size_t amount)
-{
-    // Try fallocate() first
-    {
-        int fd = open(path.c_str(), O_RDWR);
-        if(fd < 0)
-        {
-            sys_error("Could not open '{}'", path);
-            return false;
-        }
-        auto guard = sg::make_scope_guard([&]{ close(fd); });
-
-        int ret = fallocate(fd, FALLOC_FL_COLLAPSE_RANGE, 0, amount);
-        if(ret == 0)
-            return true;
-
-        sys_error("Could not use fallocate() to remove leading data from {}", path);
-        error("Falling back to slow copy mode");
+bool prepend_space_to_file(const std::filesystem::path &path,
+                           std::size_t amount) {
+  // Try fallocate() first
+  {
+    int fd = open(path.c_str(), O_RDWR);
+    if (fd < 0) {
+      sys_error("Could not open '{}'", path);
+      return false;
     }
+    auto guard = sg::make_scope_guard([&] { close(fd); });
 
-    fs::path tempFile = path;
-    tempFile += ".trt-temp";
+    int ret = fallocate(fd, FALLOC_FL_INSERT_RANGE, 0, amount);
+    if (ret == 0)
+      return true;
 
-    std::error_code ec;
-    fs::rename(path, tempFile, ec);
-    if(ec)
-    {
-        error("Could not rename {} to {}: {}", path, tempFile, ec);
-        return false;
-    }
+    sys_error("Could not use fallocate() to prepend space to {}", path);
+    error("Falling back to slow copy mode");
+  }
 
-    int srcFD = open(tempFile.c_str(), O_RDONLY);
-    if(srcFD < 0)
-    {
-        sys_error("Could not open {}", tempFile);
-        return false;
-    }
+  fs::path tempFile = path;
+  tempFile += ".trt-temp";
 
-    if(lseek(srcFD, amount, SEEK_SET) != static_cast<off_t>(amount))
-    {
-        sys_error("Could not seek in {}", tempFile);
-        return false;
-    }
+  std::error_code ec;
+  fs::rename(path, tempFile, ec);
+  if (ec) {
+    error("Could not rename {} to {}: {}", path, tempFile, ec);
+    return false;
+  }
 
-    struct stat statbuf{};
-    if(fstat(srcFD, &statbuf) != 0)
-    {
-        sys_error("Could not stat() {}", tempFile);
-        return false;
-    }
+  auto unlinkGuard = sg::make_scope_guard([&] {
+    if (unlink(tempFile.c_str()) != 0)
+      sys_error("Could not remove temporary file {}", tempFile);
+  });
 
-    auto srcGuard = sg::make_scope_guard([&]{ close(srcFD); });
+  int srcFD = open(tempFile.c_str(), O_RDONLY);
+  if (srcFD < 0) {
+    sys_error("Could not open {}", tempFile);
+    return false;
+  }
 
-    int dstFD = open(path.c_str(), O_WRONLY|O_TRUNC|O_CREAT, statbuf.st_mode);
-    if(dstFD < 0)
-    {
-        sys_error("Could not create {}", path);
-        return false;
-    }
+  struct stat statbuf {};
+  if (fstat(srcFD, &statbuf) != 0) {
+    sys_error("Could not stat() {}", tempFile);
+    return false;
+  }
 
-    auto unlinkGuard = sg::make_scope_guard([&]{
-        if(unlink(tempFile.c_str()) != 0)
-            sys_error("Could not remove temporary file {}", tempFile);
-    });
+  auto srcGuard = sg::make_scope_guard([&] { close(srcFD); });
 
-    return copy_from_to_fd(srcFD, dstFD);
+  int dstFD = open(path.c_str(), O_WRONLY | O_TRUNC | O_CREAT, statbuf.st_mode);
+  if (dstFD < 0) {
+    sys_error("Could not create {}", path);
+    return false;
+  }
+
+  std::vector<char> data(amount, 0);
+  if (write(dstFD, data.data(), data.size()) !=
+      static_cast<ssize_t>(data.size())) {
+    sys_error("Could not write zeroes to {}", path);
+    return false;
+  }
+
+  return copy_from_to_fd(srcFD, dstFD);
 }
 
-bool copy_from_to_fd(int srcFD, int dstFD, const std::optional<std::size_t>& maxSize)
-{
-    std::vector<char> buf(4096 * 1024);
+bool remove_leading_space(const std::filesystem::path &path,
+                          std::size_t amount) {
+  // Try fallocate() first
+  {
+    int fd = open(path.c_str(), O_RDWR);
+    if (fd < 0) {
+      sys_error("Could not open '{}'", path);
+      return false;
+    }
+    auto guard = sg::make_scope_guard([&] { close(fd); });
 
-    std::size_t toRead = 0;
-    if(maxSize)
-        toRead = *maxSize;
+    int ret = fallocate(fd, FALLOC_FL_COLLAPSE_RANGE, 0, amount);
+    if (ret == 0)
+      return true;
 
-    while(true)
-    {
-        std::size_t readSize = maxSize ? std::min(buf.size(), *maxSize) : buf.size();
-        auto bytes = read(srcFD, buf.data(), readSize);
-        if(bytes < 0)
-        {
-            sys_error("Could not read()");
-            return false;
-        }
-        if(bytes == 0)
-            break;
+    sys_error("Could not use fallocate() to remove leading data from {}", path);
+    error("Falling back to slow copy mode");
+  }
 
-        while(bytes != 0)
-        {
-            auto wbytes = write(dstFD, buf.data(), bytes);
-            if(wbytes <= 0)
-            {
-                sys_error("Could not write()");
-                return false;
-            }
+  fs::path tempFile = path;
+  tempFile += ".trt-temp";
 
-            bytes -= wbytes;
-        }
+  std::error_code ec;
+  fs::rename(path, tempFile, ec);
+  if (ec) {
+    error("Could not rename {} to {}: {}", path, tempFile, ec);
+    return false;
+  }
 
-        if(maxSize)
-        {
-            toRead -= bytes;
-            if(toRead == 0)
-                break;
-        }
+  int srcFD = open(tempFile.c_str(), O_RDONLY);
+  if (srcFD < 0) {
+    sys_error("Could not open {}", tempFile);
+    return false;
+  }
+
+  if (lseek(srcFD, amount, SEEK_SET) != static_cast<off_t>(amount)) {
+    sys_error("Could not seek in {}", tempFile);
+    return false;
+  }
+
+  struct stat statbuf {};
+  if (fstat(srcFD, &statbuf) != 0) {
+    sys_error("Could not stat() {}", tempFile);
+    return false;
+  }
+
+  auto srcGuard = sg::make_scope_guard([&] { close(srcFD); });
+
+  int dstFD = open(path.c_str(), O_WRONLY | O_TRUNC | O_CREAT, statbuf.st_mode);
+  if (dstFD < 0) {
+    sys_error("Could not create {}", path);
+    return false;
+  }
+
+  auto unlinkGuard = sg::make_scope_guard([&] {
+    if (unlink(tempFile.c_str()) != 0)
+      sys_error("Could not remove temporary file {}", tempFile);
+  });
+
+  return copy_from_to_fd(srcFD, dstFD);
+}
+
+bool copy_from_to_fd(int srcFD, int dstFD,
+                     const std::optional<std::size_t> &maxSize) {
+  std::vector<char> buf(4096 * 1024);
+
+  std::size_t toRead = 0;
+  if (maxSize)
+    toRead = *maxSize;
+
+  while (true) {
+    std::size_t readSize =
+        maxSize ? std::min(buf.size(), *maxSize) : buf.size();
+    auto bytes = read(srcFD, buf.data(), readSize);
+    if (bytes < 0) {
+      sys_error("Could not read()");
+      return false;
+    }
+    if (bytes == 0)
+      break;
+
+    while (bytes != 0) {
+      auto wbytes = write(dstFD, buf.data(), bytes);
+      if (wbytes <= 0) {
+        sys_error("Could not write()");
+        return false;
+      }
+
+      bytes -= wbytes;
     }
 
-    return true;
+    if (maxSize) {
+      toRead -= bytes;
+      if (toRead == 0)
+        break;
+    }
+  }
+
+  return true;
 }
 
-bool write_to_fd(int fd, const std::span<char>& data)
-{
-    std::size_t toWrite = data.size();
-    const char* ptr = data.data();
+bool write_to_fd(int fd, const std::span<char> &data) {
+  std::size_t toWrite = data.size();
+  const char *ptr = data.data();
 
-    while(toWrite != 0)
-    {
-        auto ret = write(fd, ptr, toWrite);
-        if(ret <= 0)
-        {
-            sys_error("Could not write()");
-            return false;
-        }
-
-        ptr += ret;
-        toWrite -= ret;
+  while (toWrite != 0) {
+    auto ret = write(fd, ptr, toWrite);
+    if (ret <= 0) {
+      sys_error("Could not write()");
+      return false;
     }
 
-    return true;
+    ptr += ret;
+    toWrite -= ret;
+  }
+
+  return true;
 }
 
-bool apparmor_restricts_userns()
-{
-    auto procPath = fs::path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns");
-    if(!fs::exists(procPath))
-        return false; // No AppArmor or older version that does not restrict
+bool apparmor_restricts_userns() {
+  auto procPath =
+      fs::path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns");
+  if (!fs::exists(procPath))
+    return false; // No AppArmor or older version that does not restrict
 
-    int restrict = 1;
-    std::ifstream in{procPath};
-    in >> restrict;
+  int restrict = 1;
+  std::ifstream in{procPath};
+  in >> restrict;
 
-    if(restrict == 0)
-        return false; // restriction disabled globally
+  if (restrict == 0)
+    return false; // restriction disabled globally
 
-    // Try!
-    auto childPid = fork();
-    if(childPid == 0)
-    {
-        if(unshare(CLONE_NEWUSER) != 0)
-            exit(1);
+  // Try!
+  auto childPid = fork();
+  if (childPid == 0) {
+    if (unshare(CLONE_NEWUSER) != 0)
+      exit(1);
 
-        int fd = open("/proc/self/setgroups", O_WRONLY);
-        if(fd < 0)
-            exit(1);
+    int fd = open("/proc/self/setgroups", O_WRONLY);
+    if (fd < 0)
+      exit(1);
 
-        exit(0);
-    }
+    exit(0);
+  }
 
-    int status = 0;
-    int ret = waitpid(childPid, &status, 0);
-    if(ret < 0)
-        sys_fatal("Could not waitpid()");
+  int status = 0;
+  int ret = waitpid(childPid, &status, 0);
+  if (ret < 0)
+    sys_fatal("Could not waitpid()");
 
-    bool success = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+  bool success = WIFEXITED(status) && WEXITSTATUS(status) == 0;
 
-    return !success;
+  return !success;
 }
 
-}
+} // namespace os
