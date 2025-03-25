@@ -64,6 +64,9 @@ constexpr auto LIBRARIES = std::to_array({
     "libnvidia-glvkspirv.so", /* SPIR-V Lib for Vulkan */
     "libnvidia-cbl.so",       /* VK_NV_ray_tracing */
 });
+
+constexpr auto BINDS =
+    std::to_array({"/usr/share/glvnd/egl_vendor.d", "/usr/share/egl"});
 } // namespace
 
 namespace nvidia {
@@ -93,6 +96,18 @@ bool configure() {
               nullptr) != 0) {
       error("Could not bind {} to {}: {}", entry.path, target, strerror(errno));
     }
+  }
+
+  for (fs::path path : BINDS) {
+    if (!fs::exists(path))
+      continue;
+
+    fs::path inContainer = fs::path{config::FINAL} / path;
+    if (!fs::exists(inContainer))
+      fs::create_directories(inContainer);
+
+    if (!os::bind_mount(path.c_str(), {}, MS_BIND))
+      error("Could not bind mount '{}'", path);
   }
 
   if (auto lib_path = getenv("LD_LIBRARY_PATH")) {
