@@ -45,8 +45,6 @@ constexpr auto LIBRARIES = std::to_array({
     "libnvidia-encode.so",          /* Video encoder */
     "libnvidia-opticalflow.so",     /* NVIDIA Opticalflow library */
     "libnvcuvid.so",                /* Video decoder */
-    "libnvidia-egl-wayland.so",     /* EGL wayland platform extension (used by
-                                       libEGL_nvidia) */
     "libnvidia-eglcore.so",         /* EGL core (used by libGLES*[_nvidia] and
                                        libEGL_nvidia) */
     "libnvidia-glcore.so", /* OpenGL core (used by libGL or libGLX_nvidia) */
