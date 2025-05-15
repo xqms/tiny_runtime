@@ -799,6 +799,13 @@ int main(int argc, char **argv) {
 
     // Set debian_chroot, which shows up in PS1 on Debian-based systems.
     setenv("debian_chroot", "container", 1);
+
+    // fakeroot is useful for installing packages inside the container.
+    // Since we do not have a valid user 0 inside our user namespace,
+    // chown() with UID 0 will fail with EINVAL - which fakeroot passes
+    // through to the caller. So don't even attempt the chown!
+    if(!getenv("FAKEROOTDONTTRYCHOWN"))
+      setenv("FAKEROOTDONTTRYCHOWN", "1", 1);
   }
 
   // User/OCI-specified environment variables
