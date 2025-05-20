@@ -64,7 +64,7 @@ constexpr auto LIBRARIES = std::to_array({
 });
 
 constexpr auto BINDS =
-    std::to_array({"/usr/share/glvnd/egl_vendor.d", "/usr/share/egl"});
+    std::to_array({"/usr/share/glvnd/egl_vendor.d", "/usr/share/egl", "/usr/share/vulkan"});
 } // namespace
 
 namespace nvidia {
