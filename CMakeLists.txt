@@ -17,18 +17,30 @@ ExternalProject_Add(squashfuse
     CONFIGURE_COMMAND ./autogen.sh COMMAND ./configure CFLAGS=-no-pie LDFLAGS=--static --disable-shared --enable-static --prefix=${CMAKE_CURRENT_BINARY_DIR}/tools/
     BUILD_COMMAND make VERBOSE=1
 )
+
+if(${CMAKE_SYSTEM_PROCESSOR} STREQUAL x86_64)
+    set(FUSE_OVERLAYFS_URL "https://github.com/containers/fuse-overlayfs/releases/download/v1.16/fuse-overlayfs-x86_64")
+    set(FUSE_OVERLAYFS_HASH "SHA256=30c6b9e192600d6854e13397974c709d7cabd980b7d1a4d67defd8eb69677e91")
+elseif(${CMAKE_SYSTEM_PROCESSOR} STREQUAL aarch64)
+    set(FUSE_OVERLAYFS_URL "https://github.com/containers/fuse-overlayfs/releases/download/v1.16/fuse-overlayfs-aarch64")
+    set(FUSE_OVERLAYFS_HASH "SHA256=6c9ee54166fe7d33ebbfb085812585441f22ebe2a24a868d0a878d3127bcb89e")
+else()
+    message(FATAL_ERROR "Unrecognized machine type ${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+
 ExternalProject_Add(fuse_overlayfs
-    URL https://github.com/containers/fuse-overlayfs/releases/download/v1.13/fuse-overlayfs-x86_64
-    URL_HASH SHA256=0011ad825dc0274b6e330fb9a8d3d578ea7bbf738bab08934b90be070b8d0a4a
+    URL "${FUSE_OVERLAYFS_URL}"
+    URL_HASH "${FUSE_OVERLAYFS_HASH}"
     DOWNLOAD_NO_EXTRACT ON
+    DOWNLOAD_NAME fuse-overlayfs
 
     CONFIGURE_COMMAND ""
     BUILD_COMMAND ""
     INSTALL_COMMAND ""
 )
 ExternalProject_Add(squashfs-tools
-    URL https://github.com/plougher/squashfs-tools/archive/refs/tags/4.6.1.tar.gz
-    URL_HASH SHA256=94201754b36121a9f022a190c75f718441df15402df32c2b520ca331a107511c
+    URL https://github.com/plougher/squashfs-tools/releases/download/4.7.5/squashfs-tools-4.7.5.tar.gz
+    URL_HASH SHA256=547b7b7f4d2e44bf91b6fc554664850c69563701deab9fd9cd7e21f694c88ea6
     DOWNLOAD_EXTRACT_TIMESTAMP ON
     BUILD_IN_SOURCE ON
 
@@ -75,7 +87,7 @@ target_compile_definitions(tiny_runtime_starter PRIVATE
 )
 
 ExternalProject_Get_Property(fuse_overlayfs DOWNLOAD_DIR)
-set(FUSE_OVERLAYFS_OUT "${DOWNLOAD_DIR}/fuse-overlayfs-x86_64")
+set(FUSE_OVERLAYFS_OUT "${DOWNLOAD_DIR}/fuse-overlayfs")
 add_custom_command(
     OUTPUT tiny_runtime
     DEPENDS tiny_runtime_starter squashfuse fuse_overlayfs squashfs-tools
