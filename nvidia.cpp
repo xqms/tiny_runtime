@@ -63,6 +63,13 @@ constexpr auto LIBRARIES = std::to_array({
     "libnvidia-cbl.so",       /* VK_NV_ray_tracing */
 
     "libnvidia-rmapi-tegra.so",     /* Jetson support */
+    "libnvrm_sync.so",
+    "libnvrm_surface.so",
+    "libnvrm_stream.so",
+    "libnvrm_mem.so",
+    "libnvrm_host1x.so",
+    "libnvrm_gpu.so",
+    "libnvrm_chip.so",
 });
 
 constexpr auto BINDS =
