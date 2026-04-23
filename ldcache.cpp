@@ -8,6 +8,7 @@
 #include <fmt/format.h>
 
 #include <sys/mman.h>
+#include <sys/utsname.h>
 
 #include <fcntl.h>
 #include <limits.h>
@@ -26,6 +27,8 @@
 #define MAGIC_VERSION_LEN (sizeof(MAGIC_VERSION) - 1)
 
 namespace fs = std::filesystem;
+
+using namespace std::string_view_literals;
 
 namespace {
 
@@ -157,6 +160,18 @@ public:
 
     m_base = ptr;
     m_end = end;
+
+    // Figure out LD architecture
+    utsname info{};
+    uname(&info);
+
+    if (info.machine == "x86_64"sv)
+      m_arch = LD_X8664_LIB64;
+    else if (info.machine == "aarch64"sv)
+      m_arch = LD_AARCH64_LIB64;
+    else
+      throw std::runtime_error{
+          fmt::format("Unknown architecture: '{}'", info.machine)};
   }
 
   std::string_view safeReadStr(const uint8_t *ptr) const {
@@ -183,7 +198,7 @@ public:
       auto key = safeReadStr(m_base + h->libs[i].key);
       auto value = safeReadStr(m_base + h->libs[i].value);
 
-      if (!(flags & LD_ELF) || (flags & LD_ARCH_MASK) != LD_X8664_LIB64)
+      if (!(flags & LD_ELF) || (flags & LD_ARCH_MASK) != m_arch)
         continue;
 
       for (auto &lib : libraries) {
@@ -205,6 +220,7 @@ private:
   MappedFile m_file{"/etc/ld.so.cache"};
   const uint8_t *m_base{};
   const uint8_t *m_end{};
+  int32_t m_arch = 0;
 };
 
 LDCache::LDCache() : m_d{std::make_unique<Private>()} {}
