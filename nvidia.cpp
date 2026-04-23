@@ -61,6 +61,8 @@ constexpr auto LIBRARIES = std::to_array({
     "libGLESv1_CM_nvidia.so", /* OpenGL ES v1 common profile ICD */
     "libnvidia-glvkspirv.so", /* SPIR-V Lib for Vulkan */
     "libnvidia-cbl.so",       /* VK_NV_ray_tracing */
+
+    "libnvidia-rmapi-tegra.so",     /* Jetson support */
 });
 
 constexpr auto BINDS =
