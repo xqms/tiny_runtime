@@ -73,6 +73,9 @@ constexpr auto LIBRARIES = std::to_array({
     "libnvos.so",
     "libnvosd.so",
     "libnvsocsys.so",
+    "libnvtegrahv.so",
+    "libnvsciipc.so",
+    "libnvcucompat.so",
 });
 
 constexpr auto BINDS =
