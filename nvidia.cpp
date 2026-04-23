@@ -70,6 +70,8 @@ constexpr auto LIBRARIES = std::to_array({
     "libnvrm_host1x.so",
     "libnvrm_gpu.so",
     "libnvrm_chip.so",
+    "libnvos.so",
+    "libnvosd.so",
 });
 
 constexpr auto BINDS =
