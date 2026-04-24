@@ -86,7 +86,10 @@ constexpr auto LIBRARIES = std::to_array({
     "libnvmm_utils.so",
     "libnvmm_parser.so",
     "libnvmm_contentpipe.so",
-    "libnvmm.so"
+    "libnvmm.so",
+    "libnvmmlite.so",
+    "libnvmmlite_image.so",
+    "libnvmmlite_utils.so"
 });
 
 constexpr auto BINDS =
