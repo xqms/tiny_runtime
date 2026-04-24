@@ -92,7 +92,8 @@ constexpr auto LIBRARIES = std::to_array({
     "libnvmmlite_utils.so",
     "libnvvideoencode_ppe.so",
     "libnvvideoencode.so",
-    "libnvvic.so"
+    "libnvvic.so",
+    "libnvvideo.so"
 });
 
 constexpr auto BINDS =
