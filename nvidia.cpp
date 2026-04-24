@@ -79,7 +79,8 @@ constexpr auto LIBRARIES = std::to_array({
     "libtegrav4l2.so",
     "libnvcuvidv4l2.so",
     "libnvbufsurface.so",
-    "libnvmmlite_video.so"
+    "libnvmmlite_video.so",
+    "libnvbuf_fdmap.so"
 });
 
 constexpr auto BINDS =
