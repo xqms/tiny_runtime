@@ -26,81 +26,84 @@ constexpr auto BINARIES = std::to_array({
     "nv-fabricmanager",    /* NVSwitch fabrimanager utility */
 });
 
-constexpr auto LIBRARIES = std::to_array({
-    "libnvidia-ml.so",
-    "libcuda.so",                  /* CUDA driver library */
-    "libcudadebugger.so",          /* CUDA Debugger Library */
-    "libnvidia-opencl.so",         /* NVIDIA OpenCL ICD */
-    "libnvidia-gpucomp.so",        /* Shared Compiler Library */
-    "libnvidia-ptxjitcompiler.so", /* PTX-SASS JIT compiler (used by libcuda) */
-    "libnvidia-fatbinaryloader.so", /* fatbin loader (used by libcuda) */
-    "libnvidia-allocator.so",       /* NVIDIA allocator runtime library */
-    "libnvidia-compiler.so",        /* NVVM-PTX compiler for OpenCL (used by
-                                       libnvidia-opencl) */
-    "libnvidia-pkcs11.so",          /* Encrypt/Decrypt library */
-    "libnvidia-pkcs11-openssl3.so", /* Encrypt/Decrypt library (OpenSSL 3
-                                       support) */
-    "libnvidia-nvvm.so",            /* The NVVM Compiler library */
-    "libvdpau_nvidia.so",           /* NVIDIA VDPAU ICD */
-    "libnvidia-encode.so",          /* Video encoder */
-    "libnvidia-opticalflow.so",     /* NVIDIA Opticalflow library */
-    "libnvcuvid.so",                /* Video decoder */
-    "libnvidia-eglcore.so",         /* EGL core (used by libGLES*[_nvidia] and
-                                       libEGL_nvidia) */
-    "libnvidia-glcore.so", /* OpenGL core (used by libGL or libGLX_nvidia) */
-    "libnvidia-tls.so", /* Thread local storage (used by libGL or libGLX_nvidia)
-                         */
-    "libnvidia-glsi.so", /* OpenGL system interaction (used by libEGL_nvidia) */
-    "libnvidia-fbc.so",  /* Framebuffer capture */
-    "libnvidia-ifr.so",  /* OpenGL framebuffer capture */
-    "libnvidia-rtcore.so",    /* Optix */
-    "libnvoptix.so",          /* Optix */
-    "libGLX_nvidia.so",       /* OpenGL/GLX ICD */
-    "libEGL_nvidia.so",       /* EGL ICD */
-    "libGLESv2_nvidia.so",    /* OpenGL ES v2 ICD */
-    "libGLESv1_CM_nvidia.so", /* OpenGL ES v1 common profile ICD */
-    "libnvidia-glvkspirv.so", /* SPIR-V Lib for Vulkan */
-    "libnvidia-cbl.so",       /* VK_NV_ray_tracing */
+constexpr auto LIBRARIES = std::to_array(
+    {"libnvidia-ml.so",
+     "libcuda.so",                   /* CUDA driver library */
+     "libcudadebugger.so",           /* CUDA Debugger Library */
+     "libnvidia-opencl.so",          /* NVIDIA OpenCL ICD */
+     "libnvidia-gpucomp.so",         /* Shared Compiler Library */
+     "libnvidia-ptxjitcompiler.so",  /* PTX-SASS JIT compiler (used by libcuda)
+                                      */
+     "libnvidia-fatbinaryloader.so", /* fatbin loader (used by libcuda) */
+     "libnvidia-allocator.so",       /* NVIDIA allocator runtime library */
+     "libnvidia-compiler.so",        /* NVVM-PTX compiler for OpenCL (used by
+                                        libnvidia-opencl) */
+     "libnvidia-pkcs11.so",          /* Encrypt/Decrypt library */
+     "libnvidia-pkcs11-openssl3.so", /* Encrypt/Decrypt library (OpenSSL 3
+                                        support) */
+     "libnvidia-nvvm.so",            /* The NVVM Compiler library */
+     "libvdpau_nvidia.so",           /* NVIDIA VDPAU ICD */
+     "libnvidia-encode.so",          /* Video encoder */
+     "libnvidia-opticalflow.so",     /* NVIDIA Opticalflow library */
+     "libnvcuvid.so",                /* Video decoder */
+     "libnvidia-eglcore.so",         /* EGL core (used by libGLES*[_nvidia] and
+                                        libEGL_nvidia) */
+     "libnvidia-glcore.so", /* OpenGL core (used by libGL or libGLX_nvidia) */
+     "libnvidia-tls.so",    /* Thread local storage (used by libGL or
+                             * libGLX_nvidia)
+                             */
+     "libnvidia-glsi.so",   /* OpenGL system interaction (used by libEGL_nvidia)
+                             */
+     "libnvidia-fbc.so",    /* Framebuffer capture */
+     "libnvidia-ifr.so",    /* OpenGL framebuffer capture */
+     "libnvidia-rtcore.so", /* Optix */
+     "libnvoptix.so",       /* Optix */
+     "libGLX_nvidia.so",    /* OpenGL/GLX ICD */
+     "libEGL_nvidia.so",    /* EGL ICD */
+     "libGLESv2_nvidia.so", /* OpenGL ES v2 ICD */
+     "libGLESv1_CM_nvidia.so", /* OpenGL ES v1 common profile ICD */
+     "libnvidia-glvkspirv.so", /* SPIR-V Lib for Vulkan */
+     "libnvidia-cbl.so",       /* VK_NV_ray_tracing */
 
-    "libnvidia-rmapi-tegra.so",     /* Jetson support */
-    "libnvrm_sync.so",
-    "libnvrm_surface.so",
-    "libnvrm_stream.so",
-    "libnvrm_mem.so",
-    "libnvrm_host1x.so",
-    "libnvrm_gpu.so",
-    "libnvrm_chip.so",
-    "libnvos.so",
-    "libnvosd.so",
-    "libnvsocsys.so",
-    "libnvtegrahv.so",
-    "libnvsciipc.so",
-    "libnvcucompat.so",
-    "libtegrav4l2.so",
-    "libnvcuvidv4l2.so",
-    "libnvbufsurface.so",
-    "libnvmmlite_video.so",
-    "libnvbuf_fdmap.so",
-    "libnvtvmr.so",
-    "libnvtvmr_2d.so",
-    "libnvmm_utils.so",
-    "libnvmm_parser.so",
-    "libnvmm_contentpipe.so",
-    "libnvmm.so",
-    "libnvmmlite.so",
-    "libnvmmlite_image.so",
-    "libnvmmlite_utils.so",
-    "libnvvideoencode_ppe.so",
-    "libnvvideoencode.so",
-    "libnvvic.so",
-    "libnvvideo.so",
-    "libnvparser.so",
-    "libnvbufsurftransform.so",
-    "libnvcolorutil.so"
-});
+     "libnvidia-rmapi-tegra.so", /* Jetson support */
+     "libnvrm_sync.so",
+     "libnvrm_surface.so",
+     "libnvrm_stream.so",
+     "libnvrm_mem.so",
+     "libnvrm_host1x.so",
+     "libnvrm_gpu.so",
+     "libnvrm_chip.so",
+     "libnvos.so",
+     "libnvosd.so",
+     "libnvsocsys.so",
+     "libnvtegrahv.so",
+     "libnvsciipc.so",
+     "libnvcucompat.so",
+     "libtegrav4l2.so",
+     "libnvcuvidv4l2.so",
+     "libnvbufsurface.so",
+     "libnvmmlite_video.so",
+     "libnvbuf_fdmap.so",
+     "libnvtvmr.so",
+     "libnvtvmr_2d.so",
+     "libnvmm_utils.so",
+     "libnvmm_parser.so",
+     "libnvmm_contentpipe.so",
+     "libnvmm.so",
+     "libnvmmlite.so",
+     "libnvmmlite_image.so",
+     "libnvmmlite_utils.so",
+     "libnvvideoencode_ppe.so",
+     "libnvvideoencode.so",
+     "libnvvic.so",
+     "libnvvideo.so",
+     "libnvparser.so",
+     "libnvbufsurftransform.so",
+     "libnvcolorutil.so"});
 
-constexpr auto BINDS =
-    std::to_array({"/usr/share/glvnd/egl_vendor.d", "/usr/share/egl", "/usr/share/vulkan"});
+constexpr auto BINDS = std::to_array({"/usr/share/glvnd/egl_vendor.d",
+                                      "/usr/share/egl", "/usr/share/vulkan",
+                                      "/usr/lib/aarch64-linux-gnu/tegra-egl"});
 } // namespace
 
 namespace nvidia {
