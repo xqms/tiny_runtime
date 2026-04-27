@@ -99,7 +99,11 @@ constexpr auto LIBRARIES = std::to_array(
      "libnvvideo.so",
      "libnvparser.so",
      "libnvbufsurftransform.so",
-     "libnvcolorutil.so"});
+     "libnvcolorutil.so",
+     "libnvidia-egl-wayland.so",
+     "libnvidia-egl-gbm.so",
+     "libnvdc.so"
+    });
 
 constexpr auto BINDS = std::to_array({"/usr/share/glvnd/egl_vendor.d",
                                       "/usr/share/egl", "/usr/share/vulkan",
